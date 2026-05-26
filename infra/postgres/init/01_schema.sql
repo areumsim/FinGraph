@@ -8,8 +8,15 @@
 --   4. macro: 거시지표 (ECOS)
 --   5. chat: 대화 히스토리 (PRD §7.6)
 --   6. eval: 평가 QA + 결과
+--   7. vec: 문서 청크 벡터 (pgvector — Qdrant 대체)
 
 SET client_encoding = 'UTF8';
+
+-- ── 0. 확장 ────────────────────────────────────────────────────────
+-- pgcrypto: gen_random_uuid()
+-- vector:   pgvector (청크 임베딩 저장·검색)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ── 1. 회사 마스터 ─────────────────────────────────────────────────
 CREATE SCHEMA IF NOT EXISTS master;
@@ -151,3 +158,28 @@ CREATE TABLE IF NOT EXISTS eval.runs (
     created_at     TIMESTAMPTZ     NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_runs_system_qa ON eval.runs(system, qa_id);
+
+-- ── 7. 벡터 저장 (pgvector — Qdrant 대체) ───────────────────────────
+CREATE SCHEMA IF NOT EXISTS vec;
+
+-- 청크 단위 본문 + 임베딩.
+-- dim=1024 는 BGE-M3 dense 차원. 모델 바뀌면 별 테이블 또는 ALTER 필요.
+CREATE TABLE IF NOT EXISTS vec.chunks (
+    id             BIGSERIAL       PRIMARY KEY,
+    corp_code      CHAR(8)         NOT NULL REFERENCES master.companies(corp_code),
+    rcept_no       CHAR(14)        REFERENCES fin.filings(rcept_no),
+    section        VARCHAR(100),                          -- 사업개요/위험요인/지배구조 등
+    chunk_idx      INT             NOT NULL,              -- 보고서 내 순번
+    text           TEXT            NOT NULL,
+    token_count    INT,
+    embedding      vector(1024),                          -- BGE-M3 dim
+    metadata       JSONB           NOT NULL DEFAULT '{}'::jsonb,
+    created_at     TIMESTAMPTZ     NOT NULL DEFAULT now(),
+    UNIQUE (rcept_no, chunk_idx)
+);
+
+-- ANN 인덱스 (HNSW — pgvector 0.5+). lists 보다 빠름. 코사인 거리.
+CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw
+  ON vec.chunks USING hnsw (embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_corp_section ON vec.chunks(corp_code, section);

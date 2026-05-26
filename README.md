@@ -172,9 +172,13 @@ cp .env.example .env
 # 1. 의존성 설치
 make install
 
-# 2. (선택) 컨테이너 스택 기동 — Neo4j + PostgreSQL + Qdrant
+# 2. DB 컨테이너 (PG + Neo4j minimal) — 데이터 폴더 먼저:
+mkdir -p ~/arsim/DB_FG/{postgres,neo4j/data,neo4j/logs,neo4j/import,neo4j/plugins}
 make up
-# 외부 포트: Neo4j HTTP 17474 / Bolt 17687 / PG 15432 / Qdrant 16333
+# 외부 포트:
+#   Neo4j HTTP  31009  /  Bolt  31010
+#   PostgreSQL  31011  (pgvector 내장 — 벡터 통합)
+# (Qdrant/Redis 는 옵션 — compose 에 주석으로 슬롯만)
 
 make health         # 모든 컴포넌트 ping
 

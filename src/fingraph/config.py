@@ -52,7 +52,8 @@ class Settings(BaseSettings):
 
     postgres_dsn: str = "postgresql://fingraph:fingraph_dev@localhost:5432/fingraph"
 
-    qdrant_url: str = "http://localhost:6333"
+    # Qdrant — minimal 스택에선 미사용 (pgvector 통합). 활성화 시 .env 에 값 채움.
+    qdrant_url: str = ""
     qdrant_api_key: str = ""
 
     # === 데이터 소스 ===

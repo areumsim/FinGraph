@@ -44,7 +44,8 @@ llm = [
 db = [
     "neo4j>=5.20",
     "psycopg[binary,pool]>=3.1",
-    "qdrant-client>=1.9",
+    "pgvector>=0.3",            # PG vector 컬럼 ↔ numpy/list 변환
+    "qdrant-client>=1.9",       # 옵션 (compose 의 qdrant 활성화 시)
     "sqlalchemy>=2.0",
 ]
 

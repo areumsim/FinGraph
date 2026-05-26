@@ -1,85 +1,70 @@
-# FinGraph 3-DB 스택 (Phase 1)
-# GPU 의존 컴포넌트 (BGE-M3, BGE-Reranker) 는 후속 PR.
+# FinGraph DB 스택 — PostgreSQL + Neo4j (minimal)
+#
+# 벡터: pgvector 확장 (init SQL 에서 자동 활성화) → Qdrant 별도 X.
+# 캐싱/Redis: 단일 worker 단계엔 in-process 디셔너리. 분산 가면 추가.
+# GPU (BGE-M3/Reranker): 후속 PR, 주석으로 슬롯 예약.
 #
 # === 사용법 ===
-# 전체 기동:       docker compose up -d
-# 개별 기동:       docker compose up -d postgres
-#                  docker compose up -d neo4j
-#                  docker compose up -d qdrant
-# 종료:            docker compose down
-# 로그:            docker compose logs -f --tail=100 [service]
+# 전체:        docker compose up -d
+# 개별:        docker compose up -d postgres
+#              docker compose up -d neo4j
+# 종료:        docker compose down
+# 로그:        docker compose logs -f --tail=100 [service]
 #
-# 상세 가이드:     docs/operations/docker_setup.md
+# 상세:        docs/operations/docker_setup.md
 #
-# === Port 매핑 정책 ===
-# 호스트의 다른 Neo4j/PG/Qdrant 인스턴스와 충돌 방지 위해 외부 포트는 1xxxx 로 forwarding.
-#   호스트(외부) 포트  ─→  컨테이너(내부) 포트
-#   17474            ─→  7474   (Neo4j HTTP)
-#   17687            ─→  7687   (Neo4j Bolt)
-#   15432            ─→  5432   (PostgreSQL)
-#   16333            ─→  6333   (Qdrant REST)
-#   16334            ─→  6334   (Qdrant gRPC)
-#   18080            ─→  8080   (BGE-M3 임베딩, 후속)
-#   18081            ─→  8081   (BGE-Reranker, 후속)
+# === Port 매핑 (외부 31xxx — dev 컨테이너 31001~31008 과 충돌 회피) ===
+#   호스트         컨테이너 안
+#   31009     ─→   7474    Neo4j HTTP browser
+#   31010     ─→   7687    Neo4j Bolt
+#   31011     ─→   5432    PostgreSQL
+#   31015     ─→   8080    BGE-M3 임베딩 (예약)
+#   31016     ─→   8081    BGE-Reranker (예약)
 #
-# === 접속 경로 ===
-# A) 호스트에서 Python 스크립트:                localhost:1xxxx
-# B) 같은 compose 안 다른 서비스:               neo4j:7687 (service name)
-# C) 다른 compose의 컨테이너에서 (예: dev컨):    아래 §외부 네트워크 join 참조
+# === 볼륨 매핑 (bind mount — 호스트에서 직접 백업·점검 가능) ===
+# DB_DATA_ROOT 는 .env 또는 환경변수. 기본 /home/user/arsim/DB_FG.
+# 호스트 경로 vs 컨테이너 내부 경로를 혼동하지 말 것:
 #
-# === 외부 네트워크 join (dev container 등에서 접근) ===
-# 작업환경(dev container)이 별도 compose 의 네트워크 (예: ar-poc-network) 에 있다면,
-# 아래 networks 블록을 수정해 external 로 join:
-#   networks:
-#     default:
-#       external: true
-#       name: ar-poc-network
-# 또는 두 network 모두 join:
-#   <service>.networks: [fingraph_net, ar-poc-network]
-# 그러면 dev container 에서 'fingraph-postgres:5432' 로 접속 가능 (포트 매핑 불필요).
+#   PostgreSQL
+#     호스트:    ${DB_DATA_ROOT}/postgres/
+#     컨테이너:  /var/lib/postgresql/data
+#                (PGDATA 가 .../data/pgdata 라서 실제 데이터는
+#                 호스트 ${DB_DATA_ROOT}/postgres/pgdata/ 에 생성됨)
+#     init SQL: ./infra/postgres/init/*.sql → /docker-entrypoint-initdb.d/ (read-only)
+#
+#   Neo4j
+#     호스트                                 컨테이너
+#     ${DB_DATA_ROOT}/neo4j/data        ─→  /data
+#     ${DB_DATA_ROOT}/neo4j/logs        ─→  /logs
+#     ${DB_DATA_ROOT}/neo4j/import      ─→  /var/lib/neo4j/import
+#     ${DB_DATA_ROOT}/neo4j/plugins     ─→  /plugins
+#
+# === 접속 경로 (.env) ===
+# 외부(dev 컨테이너에서 호스트로):  192.168.88.201:31xxx
+# 같은 docker network join 시:     컨테이너명(ar-postgres / ar-neo4j) + 내부 포트
 
 name: fingraph
 
 services:
 
-  neo4j:
-    image: neo4j:5.18-community
-    container_name: fingraph-neo4j
-    restart: unless-stopped
-    ports:
-      - "17474:7474"   # HTTP browser  (host:container)
-      - "17687:7687"   # Bolt          (host:container)
-    environment:
-      NEO4J_AUTH: "neo4j/fingraph_dev"
-      NEO4J_PLUGINS: '["apoc"]'
-      NEO4J_dbms_memory_heap_initial__size: "512m"
-      NEO4J_dbms_memory_heap_max__size: "2g"
-      NEO4J_dbms_memory_pagecache_size: "1g"
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-      - neo4j_import:/var/lib/neo4j/import
-      - neo4j_plugins:/plugins
-    networks: [fingraph_net]
-    healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   postgres:
-    image: postgres:16-alpine
-    container_name: fingraph-postgres
+    # pgvector 가 미리 컴파일된 공식 이미지 (PG 16 + vector 확장).
+    # Alpine 대신 일반 Debian 베이스 — 의존성 더 풍부, 크기 살짝↑ (~200MB).
+    image: pgvector/pgvector:pg16
+    container_name: ar-postgres
     restart: unless-stopped
     ports:
-      - "15432:5432"   # host:container
+      - "31011:5432"     # 호스트 : 컨테이너
     environment:
       POSTGRES_USER: fingraph
       POSTGRES_PASSWORD: fingraph_dev
       POSTGRES_DB: fingraph
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      # 호스트 ${DB_DATA_ROOT}/postgres  →  컨테이너 /var/lib/postgresql/data
+      # (실 데이터는 PGDATA 환경변수 때문에 호스트의 .../postgres/pgdata 아래 생성)
+      - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/postgres:/var/lib/postgresql/data
+      # init SQL — 빈 볼륨 첫 기동 시 자동 적용. pgvector 확장 + 스키마 생성.
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
     networks: [fingraph_net]
     healthcheck:
@@ -88,28 +73,39 @@ services:
       timeout: 5s
       retries: 10
 
-  qdrant:
-    image: qdrant/qdrant:v1.9.0
-    container_name: fingraph-qdrant
+  neo4j:
+    # 5.18 community — APOC 만 포함, GDS 미포함 (GDS 필요 시 enterprise 또는 별도)
+    image: neo4j:5.18-community
+    container_name: ar-neo4j
     restart: unless-stopped
     ports:
-      - "16333:6333"   # REST  (host:container)
-      - "16334:6334"   # gRPC  (host:container)
+      - "31009:7474"     # 호스트 31009 → 컨테이너 7474 (HTTP browser)
+      - "31010:7687"     # 호스트 31010 → 컨테이너 7687 (Bolt)
+    environment:
+      NEO4J_AUTH: "neo4j/fingraph_dev"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_memory_heap_initial__size: "512m"
+      NEO4J_dbms_memory_heap_max__size: "2g"
+      NEO4J_dbms_memory_pagecache_size: "1g"
     volumes:
-      - qdrant_data:/qdrant/storage
+      # 호스트 → 컨테이너 (각각 매핑 다름)
+      - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/neo4j/data:/data
+      - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/neo4j/logs:/logs
+      - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/neo4j/import:/var/lib/neo4j/import
+      - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/neo4j/plugins:/plugins
     networks: [fingraph_net]
     healthcheck:
-      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  # ── GPU 의존 컴포넌트 (후속 PR) ────────────────────────────────────
+  # ── 후속 PR: GPU 의존 임베딩 (BGE-M3 / Reranker) ────────────────
   # bge-m3:
   #   image: ghcr.io/huggingface/text-embeddings-inference:1.2
-  #   container_name: fingraph-bge-m3
+  #   container_name: ar-bge-m3
   #   command: --model-id BAAI/bge-m3 --port 8080
-  #   ports: ["18080:8080"]
+  #   ports: ["31015:8080"]
   #   deploy:
   #     resources:
   #       reservations:
@@ -119,9 +115,9 @@ services:
   #
   # bge-reranker:
   #   image: ghcr.io/huggingface/text-embeddings-inference:1.2
-  #   container_name: fingraph-bge-reranker
+  #   container_name: ar-bge-reranker
   #   command: --model-id BAAI/bge-reranker-v2-m3 --port 8081
-  #   ports: ["18081:8081"]
+  #   ports: ["31016:8081"]
   #   deploy:
   #     resources:
   #       reservations:
@@ -129,14 +125,33 @@ services:
   #           - { driver: nvidia, count: 1, capabilities: [gpu] }
   #   networks: [fingraph_net]
 
-volumes:
-  neo4j_data:
-  neo4j_logs:
-  neo4j_import:
-  neo4j_plugins:
-  pg_data:
-  qdrant_data:
+  # ── 옵션: Qdrant (벡터 검색 스케일 ↑ 필요 시) ────────────────────
+  # 청크 100만 넘으면 pgvector 보다 빠름. 그 전까지는 PG vector 로 충분.
+  # qdrant:
+  #   image: qdrant/qdrant:v1.9.0
+  #   container_name: ar-qdrant
+  #   ports: ["31012:6333", "31013:6334"]
+  #   volumes:
+  #     - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/qdrant:/qdrant/storage
+  #   networks: [fingraph_net]
+
+  # ── 옵션: Redis (분산 worker / queue / 대용량 캐시) ──────────────
+  # 단일 worker 단계엔 in-process 캐시로 충분. 추가 시 31014 사용.
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: ar-redis
+  #   ports: ["31014:6379"]
+  #   command: ["redis-server", "--appendonly", "yes"]
+  #   volumes:
+  #     - ${DB_DATA_ROOT:-/home/user/arsim/DB_FG}/redis:/data
+  #   networks: [fingraph_net]
 
 networks:
   fingraph_net:
     driver: bridge
+
+  # === ar-poc-network 외부 join (선택) ===
+  # dev container 와 컨테이너명으로 통신하려면 위 fingraph_net 대신 아래 external
+  # 사용 + 각 service 의 networks 를 [ar-poc-network] 로 변경.
+  # ar-poc-network:
+  #   external: true

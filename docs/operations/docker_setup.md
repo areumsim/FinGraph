@@ -1,66 +1,83 @@
-# Docker 셋업 가이드
+# Docker 셋업 가이드 (PG + Neo4j minimal)
 
-FinGraph 의 Neo4j / PostgreSQL / Qdrant 컨테이너를 띄우는 3가지 시나리오.
+FinGraph 의 **PostgreSQL(pgvector)** + **Neo4j 5.18** 컨테이너 셋업.
+Qdrant/Redis 는 옵션 (compose 에 주석으로 슬롯만 남김).
 
-## 시나리오 A: 호스트에서 일반 실행 (가장 단순)
+## 포트 / 경로 / 컨테이너명 한눈에
 
-작업환경이 호스트(머신) 자체이거나, docker-in-docker 가능한 곳에서:
+| 서비스 | 컨테이너명 | 호스트 포트 → 컨테이너 내부 | 호스트 볼륨 → 컨테이너 내부 |
+|---|---|---|---|
+| PostgreSQL | `ar-postgres` | 31011 → 5432 | `${DB_DATA_ROOT}/postgres` → `/var/lib/postgresql/data` (실데이터는 `…/postgres/pgdata/`) |
+| Neo4j | `ar-neo4j` | 31009 → 7474 (HTTP)<br>31010 → 7687 (Bolt) | `${DB_DATA_ROOT}/neo4j/data` → `/data`<br>`${DB_DATA_ROOT}/neo4j/logs` → `/logs`<br>`${DB_DATA_ROOT}/neo4j/import` → `/var/lib/neo4j/import`<br>`${DB_DATA_ROOT}/neo4j/plugins` → `/plugins` |
+
+`DB_DATA_ROOT` 기본값: `/home/user/arsim/DB_FG` (FinGraph 전용 — 다른 프로젝트와 분리).
+
+## 시나리오 A: 호스트에서 직접
 
 ```bash
+# 1. 데이터 폴더 사전 생성 (docker 가 자동 생성하지만 권한 통제 위해 권장)
+mkdir -p ~/arsim/DB_FG/{postgres,neo4j/data,neo4j/logs,neo4j/import,neo4j/plugins}
+
+# 2. (필요 시) DB_DATA_ROOT override
+export DB_DATA_ROOT=~/arsim/DB_FG    # 기본값과 동일이면 생략
+
+# 3. 기동
 cd FinGraph
+docker compose up -d                     # 둘 다
+docker compose up -d postgres            # PG 만
+docker compose up -d neo4j               # Neo4j 만
 
-# 전체 한 번에
-docker compose up -d
-
-# 또는 개별
-docker compose up -d postgres        # PG 만
-docker compose up -d neo4j           # Neo4j 만
-docker compose up -d qdrant          # Qdrant 만
-
-# 로그
+# 4. 로그
 docker compose logs -f --tail=50 postgres
 
-# 정지 (데이터 유지)
-docker compose stop
-
-# 완전 제거 (볼륨 포함 = 데이터 삭제)
-docker compose down -v
+# 5. 정지 / 제거
+docker compose stop                      # 컨테이너만 멈춤 (데이터 유지)
+docker compose down                      # 컨테이너 제거 (데이터는 호스트 폴더에 유지)
+docker compose down -v                   # 데이터까지 삭제 (주의 — bind mount 라 호스트 폴더는 안 지워짐)
 ```
 
-**.env 접속 설정:** host 의 1xxxx 포트로 접근.
+스키마 자동 적용: PG 가 빈 데이터 디렉토리로 첫 기동하면 `infra/postgres/init/01_schema.sql` 실행.
+이미 데이터가 있으면 재실행 안 됨 (의도된 동작 — 데이터 보존).
+
+**.env 접속 설정:**
 ```env
-NEO4J_URI=bolt://localhost:17687
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@localhost:15432/fingraph
-QDRANT_URL=http://localhost:16333
+NEO4J_URI=bolt://192.168.88.201:31010
+POSTGRES_DSN=postgresql://fingraph:fingraph_dev@192.168.88.201:31011/fingraph
+DB_DATA_ROOT=/home/user/arsim/DB_FG
 ```
-
-스키마는 첫 기동 시 `infra/postgres/init/01_schema.sql` 자동 적용.
 
 ---
 
-## 시나리오 B: dev container 에서 별도 compose 띄울 때
+## 시나리오 B: dev 컨테이너 안에서 작업
 
-(현재 작업환경 같은 케이스 — dev container 안에서 작업, PG/Neo4j 를 별도 컨테이너로 띄움.)
+(현재 ar-poc-dev 같은 환경 — dev 컨테이너 안에서 코드 작업, DB 컨테이너는 호스트에서 띄움.)
 
-dev container 는 보통 docker 클라이언트 없거나 `/var/run/docker.sock` 미마운트 → **호스트에서 띄워야** 합니다.
+dev 컨테이너에 docker 클라이언트가 없거나 `/var/run/docker.sock` 미마운트 → 호스트에서 띄워야 합니다.
 
-### 1) 호스트로 SSH 들어가서
+### B-1) 호스트에 SSH 해서 compose 기동
 
 ```bash
-ssh -p 31001 root@192.168.88.201           # 사용자 호스트 예시
-cd /home/user/arsim/FinGraph               # 호스트의 마운트 경로
-docker compose up -d postgres neo4j qdrant
+ssh -p 31001 root@192.168.88.201
+cd /home/user/arsim/FinGraph
+mkdir -p ~/arsim/DB_FG/{postgres,neo4j/data,neo4j/logs,neo4j/import,neo4j/plugins}
+docker compose up -d
 ```
 
-### 2) dev container 와 PG/Neo4j 가 같은 docker network 에 있도록 설정
+### B-2) dev 컨테이너에서 호스트 IP+포트로 접속 (기본)
 
-dev container 가 `ar-poc-network` 에 있다면, FinGraph compose 도 join:
+dev 컨테이너의 `.env`:
+```env
+NEO4J_URI=bolt://192.168.88.201:31010
+POSTGRES_DSN=postgresql://fingraph:fingraph_dev@192.168.88.201:31011/fingraph
+```
 
-`docker-compose.yml` 의 `networks` 블록을:
+### B-3) 같은 docker network 에 join (선택 — 컨테이너명으로 통신)
+
+dev 컨테이너가 `ar-poc-network` 에 있다면 FinGraph compose 도 join.
+
+`docker-compose.yml` 의 `networks` 블록 수정:
 ```yaml
 networks:
-  fingraph_net:
-    driver: bridge
   ar-poc-network:
     external: true
 ```
@@ -69,107 +86,117 @@ networks:
 ```yaml
 services:
   postgres:
-    networks: [fingraph_net, ar-poc-network]
+    networks: [ar-poc-network]
   neo4j:
-    networks: [fingraph_net, ar-poc-network]
-  qdrant:
-    networks: [fingraph_net, ar-poc-network]
+    networks: [ar-poc-network]
 ```
 
-그러면 dev container 안에서:
+dev 컨테이너의 `.env` 변경:
 ```env
-NEO4J_URI=bolt://fingraph-neo4j:7687       # 컨테이너명 + 내부 포트
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@fingraph-postgres:5432/fingraph
-QDRANT_URL=http://fingraph-qdrant:6333
-```
-
-### 3) 또는 호스트 IP + 매핑 포트 (network join 안 한 경우)
-
-```env
-NEO4J_URI=bolt://192.168.88.201:17687
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@192.168.88.201:15432/fingraph
-QDRANT_URL=http://192.168.88.201:16333
+NEO4J_URI=bolt://ar-neo4j:7687           # 컨테이너명 + 내부 포트
+POSTGRES_DSN=postgresql://fingraph:fingraph_dev@ar-postgres:5432/fingraph
 ```
 
 ---
 
-## 시나리오 C: compose 없이 docker run 만으로
-
-compose 가 부담스러운 환경:
+## 시나리오 C: compose 없이 docker run
 
 ```bash
-# PostgreSQL
-docker run -d --name fingraph-postgres \
+# PostgreSQL (pgvector 내장)
+docker run -d --name ar-postgres \
   --restart unless-stopped \
-  -p 15432:5432 \
+  -p 31011:5432 \
   -e POSTGRES_USER=fingraph \
   -e POSTGRES_PASSWORD=fingraph_dev \
   -e POSTGRES_DB=fingraph \
+  -e PGDATA=/var/lib/postgresql/data/pgdata \
   -v $(pwd)/infra/postgres/init:/docker-entrypoint-initdb.d:ro \
-  -v fingraph_pg_data:/var/lib/postgresql/data \
-  postgres:16-alpine
+  -v ~/arsim/DB_FG/postgres:/var/lib/postgresql/data \
+  pgvector/pgvector:pg16
 
 # Neo4j 5.18
-docker run -d --name fingraph-neo4j \
+docker run -d --name ar-neo4j \
   --restart unless-stopped \
-  -p 17474:7474 -p 17687:7687 \
+  -p 31009:7474 -p 31010:7687 \
   -e NEO4J_AUTH=neo4j/fingraph_dev \
   -e 'NEO4J_PLUGINS=["apoc"]' \
-  -v fingraph_neo4j_data:/data \
-  -v fingraph_neo4j_logs:/logs \
-  -v fingraph_neo4j_import:/var/lib/neo4j/import \
-  -v fingraph_neo4j_plugins:/plugins \
+  -v ~/arsim/DB_FG/neo4j/data:/data \
+  -v ~/arsim/DB_FG/neo4j/logs:/logs \
+  -v ~/arsim/DB_FG/neo4j/import:/var/lib/neo4j/import \
+  -v ~/arsim/DB_FG/neo4j/plugins:/plugins \
   neo4j:5.18-community
-
-# Qdrant
-docker run -d --name fingraph-qdrant \
-  --restart unless-stopped \
-  -p 16333:6333 -p 16334:6334 \
-  -v fingraph_qdrant_data:/qdrant/storage \
-  qdrant/qdrant:v1.9.0
 ```
 
-같은 network 에 join 하려면 각 명령에 `--network ar-poc-network` 추가.
+같은 network join 시 `--network ar-poc-network` 추가.
 
 ---
 
 ## 헬스체크
 
-기동 후 30~60초 기다린 뒤:
+기동 후 30~60초 대기:
 
 ```bash
-make health         # 또는 python scripts/healthcheck.py
+make health
 ```
 
-기대 출력:
+기대 출력 (정상):
 ```
 neo4j         OK        ping ok
 postgres      OK        ping ok
-qdrant        OK        ping ok
-embedding     FAIL      ...               # 임베딩 컨테이너는 후속 PR
-dart          OK        company.json ...
+pgvector      OK        vector extension installed
+qdrant        SKIP      QDRANT_URL 미설정 (minimal 스택 — pgvector 사용)
+embedding     FAIL      ...                   # GPU 컨테이너 후속 PR
+dart          OK        company.json status=000 (삼성전자(주))
 ecos          SKIP      ECOS_API_KEY 미설정
 ```
+
+---
+
+## 적재 (PG)
+
+```bash
+make load-companies     # 295 rows
+make load-filings       # 4,584 rows
+make load-financials    # 184,199 rows (수 분)
+# 또는
+make load-all
+```
+
+idempotent (UPSERT) — 여러 번 실행 안전.
 
 ---
 
 ## 트러블슈팅
 
 ### "Cannot connect to the Docker daemon"
-→ dev container 안에선 docker 클라이언트가 없을 가능성. 시나리오 B 의 방법으로 호스트에서 실행.
+→ dev 컨테이너 안엔 docker 클라이언트 없을 가능성. 시나리오 B-1 (호스트 SSH).
 
-### Neo4j 가 connection refused
-→ 첫 기동 시 30~60초 걸림. `docker logs fingraph-neo4j` 로 `Remote interface available at` 확인 후 재시도.
+### Neo4j connection refused
+→ 첫 기동 30~60초 걸림. `docker logs ar-neo4j | grep "Remote interface available"` 확인.
 
-### PG schema 가 적용 안 됨
-→ 볼륨이 이미 존재하면 init 스크립트가 다시 안 돌아감. 완전 재초기화:
+### PG schema 미적용
+→ 볼륨에 데이터가 이미 있으면 init 안 돌아감. 완전 초기화:
 ```bash
-docker compose down -v          # 또는: docker volume rm fingraph_pg_data
+docker compose down
+rm -rf ~/arsim/DB_FG/postgres/*
 docker compose up -d postgres
 ```
 
-### 포트 충돌
-→ 호스트에 이미 PG/Neo4j 가 있으면 docker-compose.yml 의 외부 포트(17xxx, 15432, 16333)를 다른 값으로 변경.
+### `vector` 확장 없음
+→ `postgres:16-alpine` 쓰면 pgvector 없음. 우리 compose 는 `pgvector/pgvector:pg16` 사용. 이미지 확인:
+```bash
+docker inspect ar-postgres | grep Image
+```
 
-### dev container 에서 컨테이너명 접속 안 됨
-→ 같은 docker network 에 join 안 됨. 시나리오 B-2 의 networks 설정 확인. 또는 시나리오 B-3 의 호스트 IP 방식.
+### 포트 충돌
+→ 31xxx 가 다른 컨테이너와 충돌하면 docker-compose.yml 의 ports 매핑 수정. dev (31001-31008), DB (31009-31011) 가 기본.
+
+### bind mount 권한
+→ Neo4j/PG 가 디렉토리 소유권 문제로 실패하면:
+```bash
+sudo chown -R 7474:7474 ~/arsim/DB_FG/neo4j   # Neo4j 5 컨테이너 UID
+sudo chown -R 999:999 ~/arsim/DB_FG/postgres  # postgres UID
+```
+
+### 데이터 분리 (다른 프로젝트와 섞이지 않게)
+→ 이미 `DB_FG` 폴더로 분리. 다른 프로젝트가 `~/arsim/DB` 쓰면 영향 없음.

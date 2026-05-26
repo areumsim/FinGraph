@@ -41,11 +41,32 @@ def _check_postgres() -> tuple[str, str]:
 
 
 def _check_qdrant() -> tuple[str, str]:
+    """옵션 — QDRANT_URL 미설정이면 SKIP."""
+    from fingraph.config import get_settings
+    if not get_settings().qdrant_url:
+        return ("SKIP", "QDRANT_URL 미설정 (minimal 스택 — pgvector 사용)")
     try:
         from fingraph.db import qdrant as qd
         return ("OK", "ping ok") if qd.ping() else ("FAIL", "ping returned False")
     except ImportError as e:
         return ("SKIP", f"qdrant-client missing: {e}")
+    except Exception as e:
+        return ("FAIL", f"{type(e).__name__}: {e}")
+
+
+def _check_pgvector() -> tuple[str, str]:
+    """PG 의 vector 확장 활성화 확인."""
+    try:
+        from fingraph.db import postgres as pg
+        conn = pg.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT extname FROM pg_extension WHERE extname='vector'")
+            row = cur.fetchone()
+            if row:
+                return ("OK", "vector extension installed")
+            return ("FAIL", "vector extension not installed — 01_schema.sql 적용 확인")
+    except ImportError as e:
+        return ("SKIP", f"psycopg missing: {e}")
     except Exception as e:
         return ("FAIL", f"{type(e).__name__}: {e}")
 
@@ -106,6 +127,7 @@ def _check_ecos() -> tuple[str, str]:
 CHECKS = {
     "neo4j":     _check_neo4j,
     "postgres":  _check_postgres,
+    "pgvector":  _check_pgvector,
     "qdrant":    _check_qdrant,
     "embedding": _check_embedding,
     "dart":      _check_dart,
