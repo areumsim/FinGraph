@@ -1,0 +1,76 @@
+# === 환경/시크릿 ===
+.env
+.env.local
+.env.*.local
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# === 데이터 (raw·processed 내용은 추적 제외, 골격만 유지) ===
+data/raw/**
+data/processed/**
+data/interim/**
+!data/README.md
+!data/**/.gitkeep
+
+# === 모델 weight (BGE-M3 등 GB 단위) ===
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# === 로그 ===
+logs/
+*.log
+
+# === Docker volumes (compose가 named volume 쓰면 무시되지만 안전망) ===
+.docker_volumes/
+
+# === Legacy (이전 BNT_ONTOLOGY 잔재 격리) ===
+_legacy/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === AI 도구 ===
+.claude/
+.claudeignore
+.codex/
+.agents/
+opencode.json
+
+# === Tracing/observability local cache ===
+.langfuse/
+.langsmith/
+
+# === 폴더 골격 유지 (override) ===
+!**/.gitkeep

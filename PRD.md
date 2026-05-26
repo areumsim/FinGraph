@@ -214,11 +214,12 @@ GraphRAG의 흔한 실패 원인은 **정량 데이터를 그래프에 욱여넣
 - 자유 Cypher 생성 → 스키마 인지(Schema-aware) Cypher 생성으로 정확도 향상
 - 정형 데이터(재무 수치)는 그래프가 아닌 PostgreSQL 직접 조회로 분리
 
-### 6.3 web (UI) → 금융 에이전트 UI
-- 단일 검색창 → 회사·기간 필터, 질문 유형 선택 추가
+### 6.3 web (UI) → 금융 에이전트 UI (채팅형)
+- **단발 검색창 → 채팅형 대화 인터페이스 (Multi-Turn, thread 기반 히스토리)** — 상세 §7.6
 - 평문 응답 → 출처 인용, 그래프 시각화(서브그래프), 재무 차트 동반
 - Azure 연결 설정 화면 → LLM Provider 선택 UI (또는 운영 환경변수로 위임)
 - 평가 모드 추가 → 벤치마크 일괄 실행 및 비교 대시보드
+- 진행 중인 에이전트(Planner/Graph/Validator…) 실시간 표시, 비용 누적 표시
 
 ### 6.4 공통 변경
 - 모든 `AzureOpenAI`/`AzureChatOpenAI` 호출 제거 → `LLMClient` 인터페이스 사용
@@ -226,9 +227,39 @@ GraphRAG의 흔한 실패 원인은 **정량 데이터를 그래프에 욱여넣
 - 모든 DB 연결 → 컨테이너 서비스명 기반 (`neo4j:7687`, `postgres:5432`)
 - 모든 임베딩 호출 → BGE-M3 자체 호스팅 엔드포인트로 변경
 
+### 6.5 추출 전략: v1/v2 혼합 (Deterministic-first + Selective LLM)
+
+기존 BNT_ONTOLOGY 시스템의 두 트랙 (v1=LLM 4-pass 전수 추출, v2=deterministic-first + selective LLM) 의 학습을 흡수하여, FinGraph 는 **결정론 우선 + LLM 보조** 의 4단계 파이프라인으로 통일한다.
+
+| Pass | 입력 | 방식 | 산출물 | LLM 비중 |
+|---|---|---|---|---|
+| **P1 (Det)** | DART XBRL 재무제표 | 직접 매핑 (Spec 기반) | PG 테이블 (`financials`) | 0% |
+| **P2 (Det)** | DART 지배구조 보고서 (정형 JSON/XML) | 직접 매핑 | Neo4j 노드/관계 (`Person`, `Company`, `EXECUTIVE_OF`, `SUBSIDIARY_OF`, ownership_pct) | 0% |
+| **P3 (LLM)** | 사업보고서 본문 (자연어) | Schema-aware LLM 추출 (Company/Person/Industry 한정) | Neo4j 관계 후보 (`PARTNER_OF`, `COMPETES_WITH`, `INVESTED_IN`) | 100% |
+| **P4 (LLM-aug)** | P3 산출 + P1/P2 결과 | 정형 cross-check, 충돌 시 정형 우선 | Neo4j 확정 관계 (validated) | 보조 (검증만) |
+
+**원칙:**
+- 정량 수치(매출/영업이익)는 P1 으로 100% 결정론. LLM 추출 금지.
+- 지배구조(임원/자회사/지분율)는 P2 로 정형 매핑. LLM 보조도 불필요.
+- "왜 협업?" "어떤 위험?" 같은 서술형 관계만 P3 LLM 추출 → 비용 절감
+- P4 가 P3 의 LLM 환각을 P1/P2 정형 데이터로 cross-validate (예: "A 가 B 의 자회사라고 LLM 이 추출했는데 P2 에 없음 → 폐기 또는 review_inbox 로")
+
+**LLM 비용 가드:**
+- 배치 P3 는 경량 모델 (GPT-4o-mini / 로컬) — PRD §5.3 매핑 따름
+- 청크 단위 호출 병렬도 조절 (`INGEST_PASS3_PARALLEL`, 기본 2)
+- 회사·연도·섹션별 캐시 (`processed/extracted/<corp_code>/<rcept_no>.jsonl`)
+
 ---
 
 ## 7. 에이전트 동작 방향성
+
+### 7.0 설계 채택: Multi-Agent + Planning (LangGraph)
+
+본 시스템은 단일 ReAct 에이전트가 아닌 **역할 분리된 다중 에이전트 + 명시적 계획 수립** 구조를 채택한다. 상세는 §7.5 참조.
+
+- **왜 단일 LLM이 부족한가:** 도구 선택 실패, 컨텍스트 오염, 추론 깊이 부족
+- **왜 LangGraph인가:** 명시적 StateGraph, 분기·병렬·재시도·체크포인트 내장, Human-in-loop 네이티브 지원
+- **핵심 가치:** 디버깅 가능성, 재현성, 검증 분리 — 금융 도메인의 정확성·감사 가능성 요구에 부합
 
 ### 7.1 라우팅 원칙
 
@@ -262,6 +293,218 @@ GraphRAG의 흔한 실패 원인은 **정량 데이터를 그래프에 욱여넣
 - **모든 답변은 출처 명시** — 문서 ID, 페이지, 그래프 노드 ID
 - **불확실한 경우 "정보 부족"으로 응답** — 환각 방지
 - **시점 정보 필수** — "2023년 기준" 등 항상 회계연도 명시
+
+---
+
+## 7.5 Multi-Agent + Planning 상세 설계 (LangGraph)
+
+§7의 라우팅·도구·신뢰성 원칙을 구현하는 실제 아키텍처. "하나의 똑똑한 에이전트보다, 역할이 분명한 여러 전문가 + 명시적 계획"이 본 시스템의 설계 철학이다.
+
+### 7.5.1 설계 원칙
+
+- **역할 분리 (Single Responsibility):** 각 에이전트는 한 가지만 한다. 디버깅·평가·교체가 명확.
+- **명시적 계획 (Plan-and-Execute):** LLM이 즉흥적으로 도구를 호출하지 않는다. Planner가 먼저 DAG를 만들고, 그 뒤에 실행한다.
+- **검증 분리:** Validator가 독립적으로 결과를 검증한다 → 신뢰성·환각 방지.
+- **재계획 가능:** 실패 시 Planner로 되돌아간다. 무한 루프 방지를 위해 `replan_count ≤ 2`.
+- **상태 명시 (StateGraph):** 모든 단계가 LangGraph State에 기록 → 완전한 추적성, 체크포인트, 재개.
+- **재무 수치는 결정론적:** LLM 환각 원천 차단. SQL/Graph 조회 결과만 사용.
+
+### 7.5.2 에이전트 구성 (7~9종)
+
+| 에이전트 | 책임 | LLM 권장 | 도구 |
+|---|---|---|---|
+| **Triage** | 의도 분류, 모호성 감지, 회사 식별, 시점 추출 | 경량 (Haiku / GPT-4o-mini) | `lookup_company` |
+| **Planner** | 태스크 분해 → DAG 생성, 워커 지정, 의존성 정의 | 고급 (Sonnet / GPT-4o) | 없음 (순수 추론) |
+| **Supervisor** | 의존성 충족된 다음 태스크 선택, 병렬 디스패치, 상태 추적 | 경량 | 없음 (라우팅만) |
+| **Research** | 벡터 검색 + 재정렬, 문서 인용 | 경량 | `vector_search`, `rerank` |
+| **Graph** | Cypher 템플릿 + 파라미터 채우기, 관계 탐색 | 고급 | `cypher_query`, `get_subgraph` |
+| **SQL** | 사전 정의 함수 풀 호출 (자유 SQL 금지) | 경량 | `get_financials`, `compare_companies` |
+| **Calculator** | 재무 계산·통계, Python sandbox | 경량 + 코드 실행 | `python_exec` (격리) |
+| **Validator** | Citation 체크, 수치 일치성, 논리 일관성, 완전성 | 경량 | `check_citation`, `verify_number` |
+| **Synthesizer** | 최종 답변 작성, 출처 태깅, 시각화 결정 | 고급 | `generate_chart` |
+
+### 7.5.3 LangGraph State 스키마
+
+모든 노드가 공유하는 단일 `AgentState` (TypedDict). 핵심 필드:
+
+```
+AgentState:
+  messages              : list[Message]            # 대화 히스토리 (append-only)
+  user_query            : str                      # 원본 질문
+  clarified_query       : str                      # Triage 산출
+  identified_entities   : dict                     # companies/persons/time_range
+  plan                  : dict                     # Planner 산출
+    └─ tasks: list[{id, agent, intent, depends_on, status}]
+  current_task_id       : str
+  task_results          : dict[task_id, result]    # append-only
+  retrieved_documents   : list
+  graph_results         : dict
+  sql_results           : dict
+  calculations          : dict
+  validation_status     : "pending" | "passed" | "failed"
+  validation_issues     : list
+  replan_count          : int                      # max 2
+  final_answer          : str
+  citations             : list
+  visualizations        : list
+  metadata              : {tokens, cost, latency}
+  trace_id              : str
+```
+
+**원칙:** 불변성(노드는 변경하지 않고 새 값 반환), 점진적 누적(리스트는 append-only), 체크포인트(각 단계 PostgreSQL 저장).
+
+### 7.5.4 흐름
+
+```
+User Query
+   ↓
+[1] Triage (intake & clarify)
+   ↓
+[2] Planner (task DAG 생성)
+   ↓
+[3] Supervisor (router) ──┬─→ Research ─┐
+                          ├─→ Graph    ─┤
+                          ├─→ SQL      ─┤  (의존성 없는 워커는 병렬, Send API)
+                          └─→ Calc     ─┘
+                                    ↓
+                          [4] Validator
+                                    ↓
+                          ┌─ failed → [Replan] (count<2)
+                          └─ passed → [5] Synthesizer
+                                              ↓
+                                       Final Answer + Citations + Viz
+```
+
+### 7.5.5 Replan & 무한 루프 방지
+
+다음 경우 Planner로 되돌아감:
+- Validator가 `failed` 반환
+- Worker가 "데이터 없음" 보고
+- 중간 결과가 예상과 크게 다름
+
+`replan_count` 최대 2회. 초과 시 부분 답변 + "정보 부족" 명시 반환.
+
+### 7.5.6 Human-in-the-Loop
+
+LangGraph `interrupt` 활용 시점:
+- **Clarification 필요:** 모호한 회사명 ("삼성" → 삼성전자/SDS/...) — Triage 단계
+- **고비용 작업 전:** "이 작업은 OpenAI API $0.50 소요됩니다" — Planner 산출 후
+- **민감 결정:** "이 답변을 외부 보고서로 사용하시겠습니까?" — Synthesizer 직전
+
+### 7.5.7 병렬 실행
+
+Planner DAG에서 의존성 없는 태스크는 LangGraph `Send` API로 동시 디스패치. 예시:
+```
+질문: "삼성전자와 LG전자의 최근 5년 매출 비교"
+T1: 삼성전자 매출 ──┐
+                  ├─→ T3: 비교·차트
+T2: LG전자 매출   ──┘
+```
+T1·T2 병렬 실행 → latency 단축.
+
+### 7.5.8 Checkpoint & Resume
+
+모든 State는 PostgreSQL에 체크포인트 저장:
+- 시스템 중단 시 마지막 노드부터 재개
+- 사용자가 "다시 계산" 요청 시 처음부터 재실행
+- 평가·디버깅 시 시점별 State 추출
+
+### 7.5.9 Cypher 안전성: 템플릿 + 파라미터
+
+자유 Cypher 생성은 환각·SQL Injection 유사 위험. 대신 **사전 정의된 템플릿**에 LLM이 파라미터만 채움:
+
+```cypher
+-- 템플릿
+MATCH (c:Company {name: $name})-[:SUBSIDIARY_OF*1..2]->(p:Company)
+WHERE r.ownership_pct >= $threshold
+RETURN p.name, p.corp_code
+```
+LLM 출력: `{name: "현대자동차", threshold: 50}` (JSON Schema 강제).
+
+### 7.5.10 SQL 안전성: 함수 풀
+
+자유 SQL 금지. 사전 정의된 함수만 호출 가능:
+- `get_revenue(company_id, year)`
+- `get_operating_income(company_id, year)`
+- `compare_companies(company_ids, metric, years)`
+- `aggregate_by_industry(industry_code, metric, year)`
+
+READ-ONLY DB 사용자로 연결. SQL Injection 원천 차단.
+
+### 7.5.11 Tracing & 보안
+
+- **Tracing:** Langfuse 또는 LangSmith 통합 필수. 모든 노드 진입/종료 span, State 변화 시각화, 실패 케이스 자동 수집.
+- **Prompt Injection 방어:** 사용자 입력과 시스템 프롬프트 분리, 검색 문서는 명확한 구분자(`<document>` 등) 사용, 의심 패턴 사전 차단.
+- **도구 권한:** 각 에이전트는 자기 도구만 호출 가능 (LangGraph 노드 단위 제한).
+- **Python sandbox:** Calculator는 네트워크·파일시스템 격리 (e2b / daytona / 자체 Docker).
+
+### 7.5.12 프롬프트 엔지니어링
+
+- 에이전트별 분리된 System Prompt (역할 + 능력 + 제약 + Few-shot + JSON Schema)
+- 각 에이전트는 **자기 일에 필요한 State만** 받음 (전체 messages 전달 X → 토큰 절약·혼란 방지)
+- 모든 의사결정 노드는 JSON 출력 강제 (OpenAI Structured Outputs / Anthropic Tool use / 로컬 Outlines)
+
+---
+
+## 7.6 Web UI: 채팅형 + 대화 히스토리 (Multi-Turn)
+
+§6.3 의 web 재구성 방향을 구체화. 단발 검색창이 아니라 **연속 대화(채팅)** 가 기본 인터랙션.
+
+### 7.6.1 인터랙션 모델
+
+- 좌측: 대화 목록 (`thread_id` 단위) — 새 대화 / 기존 대화 선택 / 삭제
+- 중앙: 채팅 메시지 스트림 (`st.chat_message` / `st.chat_input`)
+- 우측 (또는 메시지 하단 아코디언): 출처 패널 — 인용 문서, 그래프 서브뷰, SQL 결과 표, 시각화
+
+### 7.6.2 Multi-Turn 동작
+
+LangGraph `thread_id` 기반 대화 격리. 각 turn 은 다음 흐름:
+
+```
+turn N:
+  user message + 이전 turn 의 final State (entities, recent_tasks, citations 미니 요약)
+  → Triage (이번 turn 의 query 명확화, "이 회사들" 같은 대명사 해소)
+  → Planner (이전 결과 reuse 우선; 변경된 부분만 재실행)
+  → ... (이후 §7.5 흐름과 동일)
+  → Synthesizer (이번 turn 답변 + 이전 turn 과의 연결 명시)
+```
+
+핵심 패턴:
+- "위에서 답한 회사 중 매출 1조 이상은?" → Planner 가 이전 turn 의 `task_results` 를 P2 로 reuse
+- "방금 그 차트를 산업별로 다시" → Synthesizer 가 동일 데이터 + 새 그루핑으로 재생성
+- "처음부터 다시" → 명시 시 새 `thread_id` 또는 State reset
+
+### 7.6.3 히스토리 저장
+
+- LangGraph `CheckpointSaver` → PostgreSQL (`langgraph_checkpoints` 테이블 자동 생성)
+- 별도 `conversations` / `messages` 테이블 (UI 표시·검색용 정규화 view):
+  ```sql
+  conversations(id, thread_id, title, created_at, updated_at, user_id)
+  messages(id, conversation_id, turn_idx, role, content, citations_json, viz_json, created_at)
+  ```
+- `title` 은 첫 user message 의 첫 LLM 호출로 자동 요약 생성 (5단어 이내)
+- 검색: `messages.content` 전문 검색 (PG `tsvector` 인덱스)
+
+### 7.6.4 컨텍스트 윈도우 관리
+
+장기 대화에서 토큰 폭증 방지:
+- Triage 단계에서 **이번 turn 에 실제 필요한 prior context 만 추출** (최근 N개 turn + 관련된 entities/tasks)
+- 8 turn 초과 시 자동 요약 (sliding window summary 를 별도 메시지로 주입)
+- 사용자가 명시적으로 "위 내용 잊어" 요청 시 thread fork 또는 reset
+
+### 7.6.5 사용자 경험
+
+- 토큰 사용량 / 비용 실시간 표시 (turn 당 + 누적)
+- 진행 중인 에이전트 표시 (Planner → Graph → Validator ...) — LangGraph stream 으로 노드 진입 시 chip 업데이트
+- 답변 중 "출처 부족" / "재계획" 발생 시 명시 (사용자가 신뢰도 판단)
+- 답변 후 피드백 버튼 (👍/👎/📝 의견) → 평가 데이터 적재
+
+### 7.6.6 구현 스택
+
+- **Streamlit** (`streamlit>=1.35`): chat_message/chat_input 네이티브 지원
+- **PostgreSQL**: LangGraph checkpoint + conversations/messages 테이블
+- **FastAPI** (선택): UI 와 에이전트 분리 시 SSE/WebSocket streaming 엔드포인트
+- 차트: Plotly (인터랙티브 재무 시계열), pyvis (서브그래프 시각화)
 
 ---
 
@@ -331,11 +574,13 @@ GraphRAG의 흔한 실패 원인은 **정량 데이터를 그래프에 욱여넣
 - 정형 SQL 조회 도구
 - 도구 단위 동작 검증
 
-### Phase 4: 에이전트 + UI (4주차)
-- LangGraph 기반 에이전트 오케스트레이션
-- 라우팅 로직 + 답변 합성
-- Streamlit UI (web 재구성)
-- 그래프 시각화 통합
+### Phase 4: 에이전트 + UI (4주차) — Multi-Agent 단계적 도입
+- **Phase 4A:** Triage + Supervisor + 3 Worker(Research/Graph/SQL) 선형 흐름
+- **Phase 4B:** Planner Agent 도입 — DAG 기반 태스크 디스패치, 의존성 관리
+- **Phase 4C:** Validator + Replan 루프 — Citation 강제, 환각 검증
+- **Phase 4D:** Send API 병렬 실행, Calculator + Python sandbox, Checkpoint/Resume
+- **Phase 4E:** Streamlit UI + 그래프 시각화, Tracing(Langfuse/LangSmith), Human-in-loop
+- 상세 설계는 §7.5 참조
 
 ### Phase 5: 평가 및 튜닝 (5주차)
 - 자체 평가 QA 100문항 구축
@@ -359,6 +604,10 @@ GraphRAG의 흔한 실패 원인은 **정량 데이터를 그래프에 욱여넣
 8. ✅ 외부 데이터는 모두 공개·합법 출처
 9. ✅ Streamlit UI에서 질문 → 답변 + 출처 + 그래프 시각화 동시 표출
 10. ✅ LLM 3종 비교 평가 리포트 산출
+11. ✅ Planner 정확도 (LLM-as-judge) 85%+
+12. ✅ Replan 발생률 20% 이하
+13. ✅ 평균 노드 호출 수 < 8
+14. ✅ 병렬 활성화 시 E2E 응답 < 8초 (순차 < 12초)
 
 ---
 

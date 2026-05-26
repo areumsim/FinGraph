@@ -14,9 +14,12 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 
 - **금융 특화 도메인** — DART 공시 / KRX 마스터 / ECOS 거시지표 → 코스피200+코스닥100 대상
 - **3-Store 하이브리드** — Neo4j(관계) + PostgreSQL(수치) + Qdrant(의미) 역할 분리
+- **Multi-Agent + Planning (LangGraph)** — Triage / Planner / Supervisor / Workers / Validator / Synthesizer 역할 분리, 명시적 DAG 계획, 검증·재계획 루프 — 상세 [PRD §7.5](./PRD.md#75-multi-agent--planning-상세-설계-langgraph)
+- **채팅형 UI + 대화 히스토리** — 단발 질의 X, thread 기반 multi-turn, "위에서 답한 회사 중…" 같은 후속 질문 자연스럽게 — 상세 [PRD §7.6](./PRD.md#76-web-ui-채팅형--대화-히스토리-multi-turn)
+- **Deterministic-first 추출** — XBRL 재무·지배구조는 정형 직매핑 (0% LLM), 서술형 관계만 selective LLM — 상세 [PRD §6.5](./PRD.md#65-추출-전략-v1v2-혼합-deterministic-first--selective-llm)
 - **LLM 어댑터 패턴** — `LLMClient` 단일 인터페이스, `LLM_PROVIDER` 한 줄로 백엔드 교체
 - **한국어 자체 임베딩** — BGE-M3 + BGE-Reranker GPU 컨테이너
-- **재현 가능한 스택** — `docker compose up` 한 줄로 전체 시스템 기동 (예정)
+- **재현 가능한 스택** — `docker compose up` 한 줄로 전체 시스템 기동 (Phase 1 부분 구축)
 - **정량 검증 가능** — Multi-hop 100문항 자체 평가셋 + Allganize 금융 벤치마크
 
 ---
@@ -154,9 +157,35 @@ Vector only / Graph only / **Hybrid Agent** / SQL+Vector — 4종 × LLM 3종 = 
 ## 9. 문서
 
 - [PRD.md](./PRD.md) — 전체 요구사항·아키텍처 정의
+  - §6.5 Deterministic-first + Selective LLM 추출 전략
+  - §7.5 Multi-Agent + Planning 상세 설계 (LangGraph)
+  - §7.6 채팅형 UI + 대화 히스토리
 
 ---
 
-## 10. 라이선스
+## 10. Quickstart (현재)
+
+```bash
+# 0. .env 작성 (.env.example 복사 후 DART_API_KEY, ECOS_API_KEY 채움)
+cp .env.example .env
+
+# 1. (선택) 컨테이너 스택 기동 — Neo4j + PostgreSQL + Qdrant
+make up
+# 외부 포트: Neo4j HTTP 17474 / Bolt 17687 / PG 15432 / Qdrant 16333
+
+# 2. 의존성 설치
+make install
+
+# 3. 데이터 다운로드
+make ingest-corp        # DART 회사 코드 마스터
+make ingest-krx         # KRX 상장사 + 지수 구성
+make ingest-ecos        # ECOS 거시지표 (ECOS_API_KEY 필요)
+```
+
+상세는 [data/README.md](./data/README.md) 참조. LLM 어댑터·LangGraph 본체·docker compose 의 BGE-M3/Reranker 는 후속 PR.
+
+---
+
+## 11. 라이선스
 
 내부 연구·개발 단계. 라이선스 미정.

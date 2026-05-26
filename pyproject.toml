@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fingraph"
+version = "0.1.0"
+description = "한국 상장사 공시·재무 기반 금융 GraphRAG 에이전트 (Multi-Agent + Planning, LangGraph)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "areumsim" }]
+license = { text = "Proprietary" }
+keywords = ["graphrag", "finance", "korean", "dart", "langgraph", "neo4j"]
+
+# 최소 런타임 의존 — 어느 모듈을 쓰든 필요한 공통 의존
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "tenacity>=8.2",
+]
+
+[project.optional-dependencies]
+
+# 데이터 수집 (DART/KRX/ECOS)
+ingest = [
+    "pandas>=2.2",
+    "lxml>=5.0",
+    "openpyxl>=3.1",
+    "beautifulsoup4>=4.12",
+]
+
+# LLM 어댑터
+llm = [
+    "openai>=1.40",
+    "anthropic>=0.30",
+]
+
+# DB 드라이버
+db = [
+    "neo4j>=5.20",
+    "psycopg[binary,pool]>=3.1",
+    "qdrant-client>=1.9",
+    "sqlalchemy>=2.0",
+]
+
+# 에이전트 (LangGraph + FastAPI)
+agent = [
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
+# UI
+ui = [
+    "streamlit>=1.35",
+    "plotly>=5.20",
+    "pyvis>=0.3",
+]
+
+# 개발 도구
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "ipykernel>=6.29",
+]
+
+all = [
+    "fingraph[ingest,llm,db,agent,ui,dev]",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["fingraph*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: 실제 DB/LLM/외부 API 접속 필요 (기본 실행 제외)",
+]
+addopts = "-m 'not integration' -ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true

@@ -1,0 +1,45 @@
+# FinGraph 통합 의존성 (개발 환경 빠른 설치용)
+# pyproject.toml 의 [all] extra 평탄화.
+# 운영 환경에선 `pip install -e ".[all]"` 권장.
+
+# === 공통 ===
+pydantic>=2.6
+pydantic-settings>=2.2
+python-dotenv>=1.0
+httpx>=0.27
+pyyaml>=6.0
+tenacity>=8.2
+
+# === 데이터 수집 ===
+pandas>=2.2
+lxml>=5.0
+openpyxl>=3.1
+beautifulsoup4>=4.12
+
+# === LLM 어댑터 ===
+openai>=1.40
+anthropic>=0.30
+
+# === DB 드라이버 ===
+neo4j>=5.20
+psycopg[binary,pool]>=3.1
+qdrant-client>=1.9
+sqlalchemy>=2.0
+
+# === 에이전트 ===
+langgraph>=0.2
+langchain-core>=0.3
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# === UI ===
+streamlit>=1.35
+plotly>=5.20
+pyvis>=0.3
+
+# === 개발 ===
+pytest>=8.0
+pytest-asyncio>=0.23
+ruff>=0.5
+mypy>=1.10
+ipykernel>=6.29
