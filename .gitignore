@@ -49,6 +49,11 @@ logs/
 # === Legacy (이전 BNT_ONTOLOGY 잔재 격리) ===
 _legacy/
 
+# === 임시 / 메모 ===
+_tmp*
+_ref*
+*.tmp
+
 # === IDE ===
 .idea/
 .vscode/
