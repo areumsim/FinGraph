@@ -1,6 +1,15 @@
 # FinGraph 3-DB 스택 (Phase 1)
 # GPU 의존 컴포넌트 (BGE-M3, BGE-Reranker) 는 후속 PR.
-# 사용: make up / make down / make logs
+#
+# === 사용법 ===
+# 전체 기동:       docker compose up -d
+# 개별 기동:       docker compose up -d postgres
+#                  docker compose up -d neo4j
+#                  docker compose up -d qdrant
+# 종료:            docker compose down
+# 로그:            docker compose logs -f --tail=100 [service]
+#
+# 상세 가이드:     docs/operations/docker_setup.md
 #
 # === Port 매핑 정책 ===
 # 호스트의 다른 Neo4j/PG/Qdrant 인스턴스와 충돌 방지 위해 외부 포트는 1xxxx 로 forwarding.
@@ -13,15 +22,28 @@
 #   18080            ─→  8080   (BGE-M3 임베딩, 후속)
 #   18081            ─→  8081   (BGE-Reranker, 후속)
 #
-# 호스트에서 Python 스크립트가 붙을 때 → localhost:1xxxx
-# 컨테이너끼리 (compose network 내부) 붙을 때 → <service-name>:내부포트
+# === 접속 경로 ===
+# A) 호스트에서 Python 스크립트:                localhost:1xxxx
+# B) 같은 compose 안 다른 서비스:               neo4j:7687 (service name)
+# C) 다른 compose의 컨테이너에서 (예: dev컨):    아래 §외부 네트워크 join 참조
+#
+# === 외부 네트워크 join (dev container 등에서 접근) ===
+# 작업환경(dev container)이 별도 compose 의 네트워크 (예: ar-poc-network) 에 있다면,
+# 아래 networks 블록을 수정해 external 로 join:
+#   networks:
+#     default:
+#       external: true
+#       name: ar-poc-network
+# 또는 두 network 모두 join:
+#   <service>.networks: [fingraph_net, ar-poc-network]
+# 그러면 dev container 에서 'fingraph-postgres:5432' 로 접속 가능 (포트 매핑 불필요).
 
 name: fingraph
 
 services:
 
   neo4j:
-    image: neo4j:5.20-community
+    image: neo4j:5.18-community
     container_name: fingraph-neo4j
     restart: unless-stopped
     ports:

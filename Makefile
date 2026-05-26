@@ -1,6 +1,7 @@
 .PHONY: help install fmt lint test test-int up down logs health clean \
         ingest-corp ingest-krx ingest-ecos ingest-targets ingest-bulk \
-        ingest-all inventory
+        ingest-all inventory \
+        load-companies load-filings load-financials load-all
 
 PYTHON ?= python
 PIP ?= pip
@@ -28,6 +29,12 @@ help:
 	@echo "  ingest-all      corp → krx → targets → bulk 전체 순차"
 	@echo ""
 	@echo "  inventory       data/raw 인벤토리 + 누락 검증"
+	@echo ""
+	@echo "  load-companies  master.companies 적재"
+	@echo "  load-filings    fin.filings 적재"
+	@echo "  load-financials fin.financials 적재 (184K+ rows)"
+	@echo "  load-all        위 3종 순차 (PG 컨테이너 가동 필요)"
+	@echo ""
 	@echo "  clean           __pycache__/.pytest_cache 삭제"
 
 install:
@@ -82,6 +89,18 @@ ingest-all: ingest-corp ingest-krx ingest-targets ingest-bulk ingest-ecos
 
 inventory:
 	$(PYTHON) scripts/data_inventory.py
+
+load-companies:
+	$(PYTHON) scripts/load/load_companies.py
+
+load-filings:
+	$(PYTHON) scripts/load/load_filings.py
+
+load-financials:
+	$(PYTHON) scripts/load/load_financials.py
+
+load-all:
+	$(PYTHON) scripts/load/load_all.py
 
 clean:
 	find . -type d -name __pycache__ -not -path './_legacy/*' -exec rm -rf {} + 2>/dev/null || true

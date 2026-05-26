@@ -187,11 +187,22 @@ make ingest-ecos       # 거시지표 (ECOS_API_KEY 필요)
 
 # 4. 적재 결과 확인
 make inventory         # 수집 현황·누락 검증
+
+# 5. PG 적재 (docker stack 가동 + 스키마 적용 후)
+make load-companies    # master.companies (295 rows)
+make load-filings      # fin.filings     (4,584 rows)
+make load-financials   # fin.financials  (184,199 rows, ~수 분)
+# 또는 한 번에
+make load-all
 ```
 
 크롤러는 **이어받기·실패추적·Ctrl+C 안전종료** 지원 — 중단 시 `make ingest-bulk` 재실행하면 이어서, `python scripts/ingest/bulk_dart.py --retry-failed` 로 실패분만 재시도.
 
-상세는 [data/README.md](./data/README.md) 참조. LangGraph 에이전트 본체 + docker compose 의 BGE-M3/Reranker + PG 적재기는 후속 PR.
+로더는 모두 **idempotent** (`INSERT ... ON CONFLICT DO UPDATE`) — 여러 번 실행해도 안전.
+
+docker 셋업이 막히면 [docs/operations/docker_setup.md](./docs/operations/docker_setup.md) 참조 (3가지 시나리오 가이드).
+
+상세는 [data/README.md](./data/README.md) 참조. LangGraph 에이전트 본체 + docker compose 의 BGE-M3/Reranker 는 후속 PR.
 
 ---
 
