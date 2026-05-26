@@ -1,0 +1,169 @@
+# FinGraph 추출기 카탈로그 (어떤 source 에서 어떤 entity/relation 을 만드나)
+#
+# 각 extractor 는 하나의 source 를 하나 이상의 entity/relation 으로 변환.
+# Schema-aware 보장: 출력은 entities.yaml / relations.yaml 의 타입에만 한정.
+
+version: 1
+last_updated: 2026-05-26
+
+extractors:
+
+  # ── P1 (정형 — XBRL 재무) ───────────────────────────────────
+  dart_xbrl:
+    pass: P1
+    source:
+      type: api
+      endpoint: /api/fnlttSinglAcntAll.json
+      params: [corp_code, bsns_year, reprt_code, fs_div]
+    method: deterministic
+    out:
+      entities: [FinancialMetric]
+      relations: []
+    target:
+      sql_table: fin.financials       # PG 직매핑. Neo4j 미적재.
+    idempotency: UNIQUE(corp_code, bsns_year, reprt_code, fs_div, account_id, account_nm)
+    impl: src/fingraph/loaders/financials.py
+
+  # ── P2 (정형 — 마스터 + 지배구조) ──────────────────────────
+  dart_corp_master:
+    pass: P2
+    source:
+      type: api
+      endpoint: /api/corpCode.xml + /api/company.json
+    method: deterministic
+    out:
+      entities: [Company, Industry, Person]      # Person 은 CEO (company.json ceo_nm)
+      relations: [LISTED_IN, IN_INDUSTRY, HAS_CEO]
+    target:
+      sql_table: master.companies
+      neo4j_labels: [Company, Industry, Market, Person]
+    idempotency: PK(corp_code) / Cypher MERGE
+    impl:
+      sql: src/fingraph/loaders/companies.py
+      graph: src/fingraph/loaders/graph.py
+    status: ✅ Phase 3 적재 완료
+
+  krx_master:
+    pass: P2
+    source:
+      type: lib
+      lib: FinanceDataReader
+      function: StockListing(KOSPI|KOSDAQ)
+    method: deterministic
+    out:
+      entities: [Company, Market]
+      relations: [LISTED_IN]
+    target:
+      sql_table: master.companies (extra.market_cap_krw 보강)
+    idempotency: PK(corp_code) — DART 와 stock_code 매칭
+    impl: src/fingraph/loaders/companies.py
+    status: ✅ 시가총액·시장 분류
+
+  dart_other_corp_investment:           # ⭐ 자회사 추출
+    pass: P2
+    source:
+      type: api
+      endpoint: /api/otrCprInvstmntSttus.json
+      params: [corp_code, bsns_year, reprt_code]
+    method: deterministic
+    out:
+      entities: [Company]            # 자회사 corp_code (있으면 매칭, 없으면 외부 회사)
+      relations: [SUBSIDIARY_OF, RELATED_TO]
+    target:
+      neo4j_labels: [Company]
+    idempotency: MERGE on (child.corp_code, parent.corp_code, snapshot_date)
+    impl: src/fingraph/loaders/graph_subsidiaries.py    # ⏳ 미구현 (다음 PR)
+    status: ⏳ TODO Phase 4
+
+  dart_executive_status:               # ⭐ 임원진 추출
+    pass: P2
+    source:
+      type: api
+      endpoint: /api/exctvSttus.json
+      params: [corp_code, bsns_year, reprt_code]
+    method: deterministic
+    out:
+      entities: [Person]
+      relations: [EXECUTIVE_OF, HAS_CEO]
+    target:
+      neo4j_labels: [Person, Company]
+    idempotency: MERGE on (Person.name+birth_year, Company.corp_code, EXECUTIVE_OF.role)
+    impl: src/fingraph/loaders/graph_executives.py      # ⏳ 미구현
+    status: ⏳ TODO Phase 4
+
+  dart_major_shareholder:              # 최대주주
+    pass: P2
+    source:
+      type: api
+      endpoint: /api/hyslrSttus.json
+    method: deterministic
+    out:
+      entities: [Person, Company]
+      relations: [MAJOR_SHAREHOLDER_OF]
+    impl: src/fingraph/loaders/graph_shareholders.py    # ⏳ 미구현
+    status: ⏳ TODO Phase 4
+
+  ftc_large_corp_group:                # 공정위 대규모기업집단 — 후속
+    pass: P2
+    source:
+      type: csv
+      url: https://www.ftc.go.kr/ ...
+    method: deterministic
+    out:
+      entities: [Group]
+      relations: [BELONGS_TO_GROUP]
+    impl: src/fingraph/loaders/graph_groups.py
+    status: ⏳ TODO Phase 5
+
+  # ── P3 (LLM — 사업보고서 본문 청크 기반) ──────────────────
+  dart_business_report_llm:
+    pass: P3
+    source:
+      type: pg
+      table: vec.chunks
+      filter: corp_code = ? AND section IN ('II.사업의 내용', 'III.재무에 관한 사항', ...)
+    method: llm
+    llm:
+      provider: from .env LLM_MODEL_*    # PRD §5.3 매핑
+      role: research                       # LLM_MODEL_RESEARCH 사용 (경량)
+      strategy: schema_aware
+      prompt: src/fingraph/prompts/relation_extract.yaml   # ⏳ 미구현
+    out:
+      entities: [Product]
+      relations: [PARTNER_OF, COMPETES_WITH, INVESTED_IN, PRODUCES]
+    target:
+      neo4j_labels: [Product, Company]
+    idempotency: MERGE + source_chunk_ids 누적
+    confidence_gate:
+      auto_accept: ">= 0.70"
+      review_queue: "0.50 <= conf < 0.70"
+      drop: "< 0.50"
+    impl: src/fingraph/extractors/llm_relations.py        # ⏳ 미구현
+    status: ⏳ TODO Phase 4
+
+  # ── P4 (cross-validate) ─────────────────────────────────────
+  cross_validate:
+    pass: P4
+    source: P3 산출 + P2 결과
+    method: rule
+    logic: |
+      - LLM 추출 관계가 정형(P1/P2) 와 일치하면 confidence boost
+      - LLM 추출 SUBSIDIARY_OF 인데 P2 에 없으면 reject (정형 우선)
+      - PARTNER_OF 처럼 정형 출처 없는 관계는 confidence_gate 만 적용
+    impl: src/fingraph/extractors/validator.py            # ⏳ 미구현
+    status: ⏳ TODO Phase 4
+
+# ── 현재 상태 요약 ─────────────────────────────────────────────
+status_summary:
+  done:
+    - dart_xbrl (PG 184K rows)
+    - dart_corp_master (Neo4j 295 Company + 3 Market + 144 Industry + 382 Person/CEO)
+    - krx_master
+  todo_phase4:
+    - dart_other_corp_investment    # ⭐ 자회사
+    - dart_executive_status         # ⭐ 등기/사외이사
+    - dart_major_shareholder        # 최대주주
+    - dart_business_report_llm      # LLM 관계 추출
+    - cross_validate
+  todo_phase5:
+    - ftc_large_corp_group          # 기업집단

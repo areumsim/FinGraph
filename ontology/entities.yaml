@@ -1,0 +1,127 @@
+# FinGraph 엔티티 타입 정의 (SSOT)
+#
+# - Schema-aware 추출의 source-of-truth.
+# - LLM 프롬프트(P3 관계 추출)에 그대로 주입 → 환각 방지.
+# - Neo4j 노드 label = 여기 type, 속성 = properties.
+# - PG 테이블 매핑 시 sql_table 키 참조.
+#
+# 명세 규칙:
+#   type           : Neo4j 라벨 (PascalCase)
+#   key            : 자연 키 (없으면 UUID 발급)
+#   required       : 노드 생성 필수 속성
+#   optional       : 보조 속성 (없어도 OK)
+#   sql_table      : 동기화하는 PG 테이블 (있을 때만)
+#   provenance_src : 어디서 만들어지는지 — extractors.yaml 참조
+
+version: 1
+domain: korean-listed-corp
+last_updated: 2026-05-26
+
+entities:
+
+  Company:
+    description: 상장 회사 (DART corp_code 단위)
+    key: corp_code            # 8자리 DART 고유번호
+    required: [corp_code, name]
+    optional:
+      - stock_code           # 6자리 KRX 종목코드 (상장사만)
+      - market               # KOSPI / KOSDAQ / KOSDAQ GLOBAL / KONEX
+      - market_cap_krw       # 시가총액 (snapshot)
+      - sector_code          # DART induty_code
+      - corp_cls             # Y(KOSPI)/K(KOSDAQ)/N(KONEX)/E(기타)
+      - jurir_no             # 법인등록번호
+      - bizr_no              # 사업자등록번호
+      - homepage_url
+      - established_at       # date
+    sql_table: master.companies
+    provenance_src: [dart_corp_master, krx_master]
+
+  Person:
+    description: 자연인 (등기/사외이사, 감사위원, 대표이사 등)
+    key: [name, birth_year]   # 동명이인 구분용. birth_year 없으면 name 만 + dedup 검토 큐
+    required: [name]
+    optional:
+      - birth_year           # 임원 현황 보고서에 있음
+      - gender
+      - nationality
+      - careers              # array[string] — 약력
+    sql_table: null           # PG 미저장 (Neo4j 단독)
+    provenance_src: [dart_executive_status, dart_company_info]
+
+  Industry:
+    description: 업종 (DART induty_code 또는 통계청 KSIC)
+    key: code
+    required: [code]
+    optional:
+      - name                 # 한글 업종명
+      - parent_code          # 상위 분류
+      - ksic                 # 통계청 KSIC 코드 매핑
+    sql_table: null
+    provenance_src: [dart_company_info, krx_master]
+
+  Market:
+    description: 거래소 시장
+    key: name
+    required: [name]
+    optional: []
+    sql_table: null
+    provenance_src: [krx_master]
+
+  Group:
+    description: 기업집단 (삼성/현대차/SK 등)
+    key: name
+    required: [name]
+    optional:
+      - chairman             # 총수
+      - designated_year      # 공정위 지정 연도
+    sql_table: null
+    provenance_src: [ftc_large_corp_group]      # 공정위 — 후속
+
+  Product:
+    description: 사업/제품 카테고리 (사업보고서 본문 LLM 추출)
+    key: [company_corp_code, name]
+    required: [name]
+    optional:
+      - category
+      - description
+    sql_table: null
+    provenance_src: [dart_business_report_llm]
+
+  FinancialMetric:
+    description: 재무 지표 1포인트 (회사 × 연도 × 항목)
+    key: [corp_code, bsns_year, account_id]
+    required: [corp_code, bsns_year, value]
+    optional:
+      - account_id           # XBRL 표준 계정 ID
+      - account_nm
+      - fs_div               # CFS=연결, OFS=별도
+      - sj_div               # BS/IS/CIS/CF/SCE
+      - currency             # 기본 KRW
+    sql_table: fin.financials # SSOT 는 PG. Neo4j 동기화 X (정량 → PG only)
+    provenance_src: [dart_xbrl]
+
+  Filing:
+    description: 공시 보고서 (사업/반기/분기/주요사항)
+    key: rcept_no
+    required: [rcept_no, corp_code, report_nm, rcept_dt]
+    optional:
+      - pblntf_ty            # A=정기, B=주요사항, ...
+      - flr_nm
+    sql_table: fin.filings    # SSOT 는 PG
+    provenance_src: [dart_filing_list]
+
+  Event:
+    description: 공시 이벤트 (합병/분할/주요계약/소송 등) — 후속
+    key: [rcept_no, event_type]
+    required: [event_type]
+    optional:
+      - event_date
+      - description
+      - amount_krw
+    sql_table: null
+    provenance_src: [dart_major_event_report_llm]
+
+  # ── 후속 도입 후보 ─────────────────────────────────────────────
+  # Region:    지역 (사업장 위치)
+  # Patent:    특허 (KIPRIS 연동 시)
+  # NewsEvent: 뉴스 이벤트 (뉴스 RSS 연동 시)

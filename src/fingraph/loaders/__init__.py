@@ -14,6 +14,12 @@ from .companies import load_companies
 from .filings import load_filings
 from .financials import load_financials
 from .graph import load_graph_companies
+from .graph_structural import (
+    load_all_structural,
+    load_executives,
+    load_shareholders,
+    load_subsidiaries,
+)
 
 __all__ = [
     "load_companies",
@@ -22,4 +28,8 @@ __all__ = [
     "load_chunks",
     "embed_chunks",
     "load_graph_companies",
+    "load_subsidiaries",
+    "load_executives",
+    "load_shareholders",
+    "load_all_structural",
 ]

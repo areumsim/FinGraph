@@ -1,0 +1,192 @@
+# FinGraph 관계 타입 정의 (SSOT)
+#
+# 명세 규칙:
+#   type           : Neo4j 관계 타입 (SCREAMING_SNAKE_CASE)
+#   from / to      : 양 끝 엔티티 타입
+#   cardinality    : one-to-one / one-to-many / many-to-many
+#   directed       : true = (from)-[r]->(to)
+#   properties     : 관계 속성 + 타입
+#   provenance     : 어떻게 만들어지는가 (deterministic / llm / hybrid)
+#   pass           : P1 / P2 / P3 / P4 (extraction_pipeline.md 참조)
+#   confidence     : 적재 결정 신뢰도 정책
+
+version: 1
+last_updated: 2026-05-26
+
+relations:
+
+  # ── P1 (XBRL → PG only — Neo4j 미적재) ─────────────────────
+  # FinancialMetric 자체는 노드로 안 만들고 PG fin.financials 에만 둠.
+  # 필요 시 (:Company)-[:HAS_FINANCIAL]->(:FinancialMetric) 로 가상화.
+
+  # ── P2 (정형 직매핑 — LLM 0%) ─────────────────────────────
+  LISTED_IN:
+    from: Company
+    to: Market
+    directed: true
+    cardinality: many-to-one
+    properties: []
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  IN_INDUSTRY:                # 기존 IN_SECTOR 와 동일. 표준화.
+    from: Company
+    to: Industry
+    directed: true
+    cardinality: many-to-one
+    properties:
+      - { name: source, type: string, enum: [dart, krx] }
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  BELONGS_TO_GROUP:           # 공정위 대규모기업집단
+    from: Company
+    to: Group
+    directed: true
+    cardinality: many-to-one
+    properties:
+      - { name: since, type: date }
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  SUBSIDIARY_OF:              # ⭐ GraphRAG 핵심 — DART otrCprInvstmntSttus
+    from: Company
+    to: Company
+    directed: true              # (child)-[:SUBSIDIARY_OF]->(parent)
+    cardinality: many-to-one
+    properties:
+      - { name: ownership_pct, type: float, required: true }   # 0~100
+      - { name: snapshot_date, type: date, required: true }
+      - { name: rcept_no, type: string }       # 출처 보고서
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+    notes: |
+      - ownership_pct ≥ 50 이면 통상 자회사 (회계 기준).
+      - 50% 미만은 관계회사 (RELATED_TO) 로 별도 분류.
+
+  RELATED_TO:                  # 관계회사 (10% ≤ pct < 50%)
+    from: Company
+    to: Company
+    directed: true
+    cardinality: many-to-many
+    properties:
+      - { name: ownership_pct, type: float }
+      - { name: snapshot_date, type: date }
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  MAJOR_SHAREHOLDER_OF:        # 최대주주 (DART hyslrSttus)
+    from: Person                 # 또는 Company (법인 주주)
+    to: Company
+    directed: true
+    cardinality: many-to-many
+    properties:
+      - { name: ownership_pct, type: float, required: true }
+      - { name: snapshot_date, type: date, required: true }
+      - { name: relation, type: string }      # 본인/특수관계인/임원
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  EXECUTIVE_OF:                # ⭐ DART exctvSttus — 임원진
+    from: Person
+    to: Company
+    directed: true
+    cardinality: many-to-many
+    properties:
+      - { name: role, type: string, required: true }   # 대표이사/사외이사/감사위원/...
+      - { name: registered, type: bool }               # 등기 여부
+      - { name: since, type: date }
+      - { name: until, type: date }                    # 퇴임/임기만료
+      - { name: rcept_no, type: string }
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  HAS_CEO:                     # P2 의 EXECUTIVE_OF where role='대표이사' 별칭.
+    from: Company
+    to: Person
+    directed: true
+    cardinality: many-to-many
+    properties: []
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+    notes: 검색 단순화용 derived. EXECUTIVE_OF 가 SSOT.
+
+  HAS_FILING:                  # Company → Filing (메타 그래프)
+    from: Company
+    to: Filing
+    directed: true
+    cardinality: one-to-many
+    properties: []
+    provenance: deterministic
+    pass: P2
+    confidence: 1.0
+
+  # ── P3 (LLM 추출 — 사업보고서 본문) ────────────────────────
+  PARTNER_OF:                  # 협력/제휴 (사업보고서 "주요거래처", "협력업체")
+    from: Company
+    to: Company
+    directed: false              # 양방향 — 둘 다 partner
+    cardinality: many-to-many
+    properties:
+      - { name: nature, type: string }    # 공급/판매/JV/...
+      - { name: source_chunk_ids, type: array<bigint> }   # vec.chunks 인용
+    provenance: llm
+    pass: P3
+    confidence: ">= 0.70 적재, >= 0.50 < 0.70 review queue, < 0.50 폐기"
+
+  COMPETES_WITH:
+    from: Company
+    to: Company
+    directed: false
+    cardinality: many-to-many
+    properties:
+      - { name: source_chunk_ids, type: array<bigint> }
+    provenance: llm
+    pass: P3
+    confidence: ">= 0.70 적재"
+
+  INVESTED_IN:                 # 비지배 투자 (전략적 지분, JV 등)
+    from: Company
+    to: Company
+    directed: true
+    cardinality: many-to-many
+    properties:
+      - { name: amount_krw, type: int }
+      - { name: ownership_pct, type: float }
+      - { name: source_chunk_ids, type: array<bigint> }
+    provenance: llm
+    pass: P3
+    confidence: ">= 0.70 적재"
+
+  PRODUCES:                    # Company → Product
+    from: Company
+    to: Product
+    directed: true
+    cardinality: one-to-many
+    properties:
+      - { name: revenue_share_pct, type: float }
+      - { name: source_chunk_ids, type: array<bigint> }
+    provenance: llm
+    pass: P3
+    confidence: ">= 0.60 적재 (Product 는 자유도 높음)"
+
+  # ── P4 (cross-validate 후 활성화/폐기) ──────────────────────
+  # P3 산출을 P1/P2 정형 데이터와 대조:
+  #   예) LLM 이 "A is subsidiary of B" 추출 → P2 의 SUBSIDIARY_OF 에 이미 있으면 redundant,
+  #       없으면 review_inbox 로 (정형 출처 우선 원칙).
+  # validated: true 플래그를 관계 속성에 추가하거나, REJECTED 별도 라벨로 보관.
+
+# ── 명명 컨벤션 ─────────────────────────────────────────────────
+naming_conventions:
+  - entity_type:    PascalCase (Company, Person)
+  - relation_type:  SCREAMING_SNAKE_CASE (SUBSIDIARY_OF, EXECUTIVE_OF)
+  - property:       snake_case (ownership_pct, snapshot_date)
+  - direction:      "FROM → TO" 항상 일관 (예: child SUBSIDIARY_OF parent)

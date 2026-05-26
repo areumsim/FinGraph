@@ -240,6 +240,58 @@ class DartClient:
 
     # ---- 5. 재무제표 ----
 
+    # ---- 6. 지배구조 정형 API (그래프 P2) ----
+
+    def get_other_corp_investment(
+        self, corp_code: str, bsns_year: str, reprt_code: str = "11011",
+    ) -> list[dict]:
+        """타법인 출자 현황 — 자회사·관계회사 추출의 source-of-truth.
+
+        return list of row dict (keys: invstmnt_purps, invstmnt_amount,
+        bsis_blce_qy, bsis_blce_qota_rt, ...)
+        """
+        data = self._get_json("otrCprInvstmntSttus.json", {
+            "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code,
+        })
+        if data.get("status") == DART_STATUS_NO_DATA:
+            return []
+        return data.get("list", [])
+
+    def get_executive_status(
+        self, corp_code: str, bsns_year: str, reprt_code: str = "11011",
+    ) -> list[dict]:
+        """임원 현황 — 등기/사외이사/감사위원 명단."""
+        data = self._get_json("exctvSttus.json", {
+            "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code,
+        })
+        if data.get("status") == DART_STATUS_NO_DATA:
+            return []
+        return data.get("list", [])
+
+    def get_largest_shareholder(
+        self, corp_code: str, bsns_year: str, reprt_code: str = "11011",
+    ) -> list[dict]:
+        """최대주주 현황 (특수관계인 포함)."""
+        data = self._get_json("hyslrSttus.json", {
+            "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code,
+        })
+        if data.get("status") == DART_STATUS_NO_DATA:
+            return []
+        return data.get("list", [])
+
+    def get_employee_status(
+        self, corp_code: str, bsns_year: str, reprt_code: str = "11011",
+    ) -> list[dict]:
+        """직원 현황 (전체 임직원 수·평균 연봉 등 — Company 보강)."""
+        data = self._get_json("empSttus.json", {
+            "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code,
+        })
+        if data.get("status") == DART_STATUS_NO_DATA:
+            return []
+        return data.get("list", [])
+
+    # ---- 5. 재무제표 ----
+
     def get_single_finstat_all(
         self,
         corp_code: str,
