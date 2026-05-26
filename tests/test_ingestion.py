@@ -86,11 +86,32 @@ def test_ecos_parse_float_robust():
     assert _parse_float("not a number") is None
 
 
-def test_krx_client_init():
-    """간단 초기화 — httpx Client 가 KRX User-Agent 로 셋업되는지."""
-    from fingraph.ingestion.krx_client import KRX_BROWSER_HEADERS, KrxClient
+def test_krx_top_n_by_market_cap():
+    """FDR 응답을 mock 해서 시가총액 정렬 + Listing 변환 검증."""
+    import pandas as pd
 
-    with patch("fingraph.ingestion.krx_client.httpx.Client") as mock_httpx:
-        KrxClient()
-        kwargs = mock_httpx.call_args.kwargs
-        assert kwargs["headers"] == KRX_BROWSER_HEADERS
+    from fingraph.ingestion.krx_client import KrxClient
+
+    fake_df = pd.DataFrame({
+        "Code":   ["005930", "000660", "035420"],
+        "Name":   ["삼성전자", "SK하이닉스", "NAVER"],
+        "Market": ["KOSPI", "KOSPI", "KOSPI"],
+        "Marcap": [1_000_000_000, 500_000_000, 200_000_000],
+        "ISU_CD": ["KR1", "KR2", "KR3"],
+    })
+    with patch("FinanceDataReader.StockListing", return_value=fake_df):
+        client = KrxClient()
+        top2 = client.top_n_by_market_cap("KOSPI", n=2)
+        assert len(top2) == 2
+        assert top2[0].stock_code == "005930"
+        assert top2[0].market_cap == 1_000_000_000
+        assert top2[1].stock_code == "000660"
+
+
+def test_krx_unknown_market():
+    from fingraph.ingestion.krx_client import KrxClient
+
+    with patch("FinanceDataReader.StockListing"):
+        client = KrxClient()
+        with pytest.raises(ValueError, match="unknown market"):
+            client.fetch_listed_companies("INVALID")

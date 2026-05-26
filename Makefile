@@ -1,5 +1,6 @@
 .PHONY: help install fmt lint test test-int up down logs health clean \
-        ingest-corp ingest-krx ingest-ecos ingest-all
+        ingest-corp ingest-krx ingest-ecos ingest-targets ingest-bulk \
+        ingest-all inventory
 
 PYTHON ?= python
 PIP ?= pip
@@ -20,10 +21,13 @@ help:
 	@echo "  health          모든 인프라 (Neo4j/PG/Qdrant/임베딩/DART/ECOS) ping"
 	@echo ""
 	@echo "  ingest-corp     DART 회사 코드 마스터 다운로드"
-	@echo "  ingest-krx      KRX 상장사 + KOSPI200/KOSDAQ100 구성 종목"
-	@echo "  ingest-ecos     ECOS 거시지표"
-	@echo "  ingest-all      위 3종 일괄"
+	@echo "  ingest-krx      KRX 상장사 + 시가총액 상위 200/100"
+	@echo "  ingest-ecos     ECOS 거시지표 (ECOS_API_KEY 필요)"
+	@echo "  ingest-targets  corp_code × stock_code 매칭 → ingest_targets.jsonl"
+	@echo "  ingest-bulk     KOSPI200+KOSDAQ100 × 3년 일괄 (이어받기·실패추적 지원)"
+	@echo "  ingest-all      corp → krx → targets → bulk 전체 순차"
 	@echo ""
+	@echo "  inventory       data/raw 인벤토리 + 누락 검증"
 	@echo "  clean           __pycache__/.pytest_cache 삭제"
 
 install:
@@ -68,7 +72,16 @@ ingest-krx:
 ingest-ecos:
 	$(PYTHON) scripts/ingest/download_ecos.py
 
-ingest-all: ingest-corp ingest-krx ingest-ecos
+ingest-targets:
+	$(PYTHON) scripts/ingest/build_targets.py
+
+ingest-bulk:
+	$(PYTHON) scripts/ingest/bulk_dart.py
+
+ingest-all: ingest-corp ingest-krx ingest-targets ingest-bulk ingest-ecos
+
+inventory:
+	$(PYTHON) scripts/data_inventory.py
 
 clean:
 	find . -type d -name __pycache__ -not -path './_legacy/*' -exec rm -rf {} + 2>/dev/null || true

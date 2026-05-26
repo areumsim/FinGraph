@@ -169,20 +169,29 @@ Vector only / Graph only / **Hybrid Agent** / SQL+Vector — 4종 × LLM 3종 = 
 # 0. .env 작성 (.env.example 복사 후 DART_API_KEY, ECOS_API_KEY 채움)
 cp .env.example .env
 
-# 1. (선택) 컨테이너 스택 기동 — Neo4j + PostgreSQL + Qdrant
+# 1. 의존성 설치
+make install
+
+# 2. (선택) 컨테이너 스택 기동 — Neo4j + PostgreSQL + Qdrant
 make up
 # 외부 포트: Neo4j HTTP 17474 / Bolt 17687 / PG 15432 / Qdrant 16333
 
-# 2. 의존성 설치
-make install
+make health         # 모든 컴포넌트 ping
 
-# 3. 데이터 다운로드
-make ingest-corp        # DART 회사 코드 마스터
-make ingest-krx         # KRX 상장사 + 지수 구성
-make ingest-ecos        # ECOS 거시지표 (ECOS_API_KEY 필요)
+# 3. 데이터 수집 (4단계 또는 make ingest-all)
+make ingest-corp       # DART 회사 코드 마스터 (~3,900 상장사)
+make ingest-krx        # KRX KOSPI top200 + KOSDAQ top100 (시가총액)
+make ingest-targets    # corp_code × stock_code 매칭 → ingest_targets.jsonl
+make ingest-bulk       # 295사 × 3년 일괄 (≈ 2~5분, 이어받기 지원)
+make ingest-ecos       # 거시지표 (ECOS_API_KEY 필요)
+
+# 4. 적재 결과 확인
+make inventory         # 수집 현황·누락 검증
 ```
 
-상세는 [data/README.md](./data/README.md) 참조. LLM 어댑터·LangGraph 본체·docker compose 의 BGE-M3/Reranker 는 후속 PR.
+크롤러는 **이어받기·실패추적·Ctrl+C 안전종료** 지원 — 중단 시 `make ingest-bulk` 재실행하면 이어서, `python scripts/ingest/bulk_dart.py --retry-failed` 로 실패분만 재시도.
+
+상세는 [data/README.md](./data/README.md) 참조. LangGraph 에이전트 본체 + docker compose 의 BGE-M3/Reranker + PG 적재기는 후속 PR.
 
 ---
 
