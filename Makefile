@@ -28,6 +28,7 @@ help:
 	@echo "  ingest-ecos     ECOS 거시지표 (ECOS_API_KEY 필요)"
 	@echo "  ingest-targets  corp_code × stock_code 매칭 → ingest_targets.jsonl"
 	@echo "  ingest-bulk     KOSPI200+KOSDAQ100 × 3년 일괄 (이어받기·실패추적 지원)"
+	@echo "  ingest-docs     사업보고서 원문 zip 다운로드 (~1,149건, ~수 분)"
 	@echo "  ingest-all      corp → krx → targets → bulk 전체 순차"
 	@echo ""
 	@echo "  inventory       data/raw 인벤토리 + 누락 검증"
@@ -36,6 +37,9 @@ help:
 	@echo "  load-filings    fin.filings 적재"
 	@echo "  load-financials fin.financials 적재 (184K+ rows)"
 	@echo "  load-all        위 3종 순차 (PG 컨테이너 가동 필요)"
+	@echo "  build-chunks    DART zip → vec.chunks (embedding NULL, ~73만 row)"
+	@echo "  embed-chunks    BGE-M3 호출 → embedding 채우기 (BGE 서버 필요)"
+	@echo "  load-graph      Neo4j Company/Market/Sector/Person 노드 + 관계"
 	@echo ""
 	@echo "  clean           __pycache__/.pytest_cache 삭제"
 
@@ -87,6 +91,9 @@ ingest-targets:
 ingest-bulk:
 	$(PYTHON) scripts/ingest/bulk_dart.py
 
+ingest-docs:
+	$(PYTHON) scripts/ingest/download_documents.py
+
 ingest-all: ingest-corp ingest-krx ingest-targets ingest-bulk ingest-ecos
 
 inventory:
@@ -103,6 +110,15 @@ load-financials:
 
 load-all:
 	$(PYTHON) scripts/load/load_all.py
+
+build-chunks:
+	$(PYTHON) scripts/load/build_chunks.py
+
+embed-chunks:
+	$(PYTHON) scripts/load/embed_chunks.py
+
+load-graph:
+	$(PYTHON) scripts/load/load_graph_companies.py
 
 clean:
 	find . -type d -name __pycache__ -not -path './_legacy/*' -exec rm -rf {} + 2>/dev/null || true
