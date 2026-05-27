@@ -8,10 +8,36 @@
 | 모듈 | 역할 | 백엔드 |
 |---|---|---|
 | `tools.financials` | 재무 수치·회사 마스터 | PostgreSQL |
-| `tools.graph` | 자회사·임원·주주·뉴스·기업집단 | Neo4j |
+| `tools.graph` | 자회사·임원·주주·뉴스·기업집단 | Neo4j (via `tools/cypher_templates.py` 레지스트리) |
 | `tools.retrieve` | 본문 의미 검색 + 메타 필터 | pgvector |
+| `tools.cypher_templates` | Cypher 템플릿 + 파라미터 JSON Schema 검증 (PRD §7.5.9) | — |
 
-모든 함수는 dict / list[dict] 반환 (JSON serializable).
+모든 함수는 dict / list[dict] 반환 (JSON serializable). Neo4j 호출은 다중 가드:
+
+1. **레지스트리**: `cypher_templates.render_template(name, params)` 가 type / range / regex 검증 — 실패 시 `TemplateError`
+2. **cypher_guard**: `_run()` 직전 정적 READ-ONLY 검사 — CREATE/MERGE/DELETE/APOC write 차단
+3. **그래프 폭발 가드**: `_cap(limit)` 가 `HARD_LIMIT=500` 초과 차단
+
+## tools.cypher_templates 레지스트리 (PRD §7.5.9)
+
+총 22개 템플릿 등록 (`list_templates()` 로 조회). 동적 부분 (hops 1~5, depth 1~3) 은
+사전 등록된 변형으로 처리 — Cypher 문자열 인라인 포매팅 일체 금지.
+
+`param_schema` 예시:
+```python
+"list_subsidiaries": {
+    "cypher": "MATCH ... WHERE $year IS NULL OR r.rcept_year = $year ...",
+    "required_params": ["cc", "limit"],
+    "param_schema": {
+        "cc": (str, ("regex", r"^\d{8}$")),           # corp_code 8자리
+        "year": (int, ("range", 1990, 2099)),         # optional (None 허용)
+        "limit": (int, ("range", 1, 500)),
+    },
+}
+```
+
+지원 constraint: `("enum", set)`, `("range", min, max)`, `("regex", pattern)`. bool 은
+int/float 자리에서 거절 (의도치 않은 truthy 통과 방지).
 
 ## tools.graph 주요 함수
 

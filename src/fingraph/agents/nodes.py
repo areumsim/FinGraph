@@ -419,13 +419,29 @@ def synthesizer_node(state: AgentState,
         state["grounding"] = {"ok": False, "warnings": ["cost_rejected"]}
         return state
 
-    # 도구 결과 + evidence 를 요약해 LLM 입력으로
-    context = _build_context(state)
+    # Pre-synth number guard (PRD §7.3) — 화이트리스트 + evidence 라벨링
+    from .number_guard import (
+        collect_approved_numbers,
+        format_approved_for_prompt,
+        sanitize_evidence_for_synth,
+    )
+    approved = collect_approved_numbers(state)
+    sanitized_evidence = sanitize_evidence_for_synth(
+        state.get("evidence_chunks") or [], approved,
+    )
+
+    # 도구 결과 + (정제된) evidence 를 요약해 LLM 입력으로
+    context = _build_context(state, sanitized_evidence=sanitized_evidence)
+    approved_line = format_approved_for_prompt(approved)
     messages = [
         {"role": "system", "content": (
             "당신은 한국 금융 분석가다. 사용자의 질문에 도구 출력과 본문 인용을 근거로 "
-            "정확히 답변한다. 본문에 없는 내용은 추측하지 말 것. "
-            "수치는 도구 결과(get_revenue / get_operating_income 등) 만 인용하고, "
+            "정확히 답변한다. 본문에 없는 내용은 추측하지 말 것.\n"
+            "**중요 (재무 수치 가드):**\n"
+            f"- 답변에 인용 가능한 정량 수치: {approved_line}\n"
+            "- 그 외 숫자는 추정·합산·변환하지 말 것. 필요하면 '정보 부족' 으로 응답.\n"
+            "- 본문 안 [검증불가:N] 표시 숫자는 답변에 절대 옮기지 말 것.\n"
+            "- [수치:N] 표시는 검증된 수치 — 그대로 인용 가능.\n"
             "답변 끝에 [출처: corp_code, fiscal_year, section] 형식 인용을 붙인다."
         )},
         {"role": "user", "content": context},
@@ -488,8 +504,13 @@ def synthesizer_node(state: AgentState,
     return state
 
 
-def _build_context(state: AgentState) -> str:
-    """tool_results + evidence_chunks → LLM 입력 텍스트."""
+def _build_context(state: AgentState, *,
+                    sanitized_evidence: list[dict] | None = None) -> str:
+    """tool_results + evidence_chunks → LLM 입력 텍스트.
+
+    sanitized_evidence 가 주어지면 그것을 사용 (number_guard 가 라벨링한 본문).
+    None 이면 원본 evidence_chunks 그대로 (이전 호환).
+    """
     parts: list[str] = []
     parts.append(f"[질문]\n{state.get('question','')}\n")
 
@@ -503,14 +524,16 @@ def _build_context(state: AgentState) -> str:
             parts.append(f"- {t['tool']} ({t.get('purpose','')}): {preview}")
         parts.append("")
 
-    ev = state.get("evidence_chunks") or []
+    ev = sanitized_evidence if sanitized_evidence is not None else (state.get("evidence_chunks") or [])
     if ev:
         parts.append("[본문 인용]")
         for c in ev[:6]:
+            score = c.get('score')
+            score_s = f"{score:.3f}" if isinstance(score, (int, float)) else "?"
             parts.append(
                 f"- corp={c.get('corp_code')} year={c.get('fiscal_year')} "
-                f"sec={c.get('section','')[:30]} score={c.get('score'):.3f}\n"
-                f"  {c.get('text','')[:400]}"
+                f"sec={(c.get('section') or '')[:30]} score={score_s}\n"
+                f"  {(c.get('text') or '')[:400]}"
             )
         parts.append("")
 

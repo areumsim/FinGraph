@@ -28,6 +28,9 @@
   agents/session.py        — thread 별 entity TTL 메모리 (in-memory, LRU)
   agents/checkpointer.py   — PG (chat schema) / Memory 자동 선택
   agents/tracing.py        — Langfuse / LangSmith fail-soft
+  agents/interrupts.py     — HITL payload + clarification/cost_approval (PRD §7.5.6)
+  agents/cost_estimator.py — Planner 산출 비용 추정 (cost_approval 가드)
+  agents/number_guard.py   — Pre-synth 화이트리스트 + evidence 라벨링 (PRD §7.3)
         │
         ▼
 [안전 가드]
@@ -235,6 +238,33 @@ User              UI               API               LangGraph
  │  답변 표시      │ ◀───────────────│                  │
 ```
 
+## 7.7. Pre-synth Number Guard (PRD §7.3)
+
+"재무 수치는 절대 LLM 이 생성하지 않는다" 원칙을 입력 단계에서 강제. Validator 는
+post-hoc 검사라 사용자에게 잘못된 숫자가 노출될 수 있다. number_guard 는 그 전에
+synthesizer 입력을 정제.
+
+```
+collect_approved_numbers(state)
+  → tool_results + evidence_chunks 의 큰 숫자(콤마≥2 또는 7자리 이상) 수집
+
+sanitize_evidence_for_synth(evidence, approved)
+  → evidence 본문에서 큰 숫자를 두 라벨로 마킹:
+     [수치:N]      — approved 화이트리스트에 있음 (LLM 인용 가능)
+     [검증불가:N]  — approved 에 없음 (LLM 이 인용 금지)
+
+format_approved_for_prompt(approved)
+  → system prompt 의 "인용 가능 수치" 절에 들어갈 한 줄 (상위 10개 + 외 N개)
+```
+
+Synthesizer system prompt 가 명시:
+- 답변 가능 수치는 화이트리스트로 한정
+- 본문의 `[검증불가:N]` 은 답변에 옮기지 말 것
+- `[수치:N]` 만 그대로 인용
+
+corp_code (leading-0 8자리) / 4자리 연도 / 소수점 비율 (9.5%) 은 `_BIG_NUMBER_RE` 가
+원천 제외. validator 와 동일한 정의를 공유 → 입출력 가드 일관성.
+
 ## 8. Streaming (PRD §7.6.5)
 
 `run_agent_stream` 이 `(node_name, partial_state)` yield. 마지막은 항상 `('__final__', ...)`.
@@ -288,8 +318,12 @@ TTL 3600s, LRU 256 (env `FINGRAPH_SESSION_TTL` / `_MAX` 로 조정).
 | **workers** | `tests/test_workers.py` | 4 worker × intent 허용·차단·실패·dispatch / Calculator 인젝션 차단 |
 | **supervisor** | `tests/test_supervisor.py` | sequential dispatch / 의존성 순서 / 순환 skip / 예산 차단 / Send 디렉티브 |
 | **planner DAG** | `tests/test_planner_dag.py` | question_kind 별 DAG 구성 / multi_hop 의존성 / year_hint / 빈 plan |
+| **interrupts** | `tests/test_interrupts.py` + `test_triage_interrupt.py` | payload / ambiguity / coerce / 폴백 자동 해결 / resume |
+| **cost approval** | `tests/test_cost_estimator.py` + `test_cost_approval.py` | 비용 추정 단조성 / 임계 / resume / 거절 / 폴백 |
+| **cypher templates** | `tests/test_cypher_templates.py` | 레지스트리 무결성 / param schema (type/range/regex) / hops·depth 변형 / bool reject |
+| **number guard** | `tests/test_number_guard.py` | 화이트리스트 수집 / 라벨링 / 원본 불변 / cap·text_max / prompt 형식 |
 
-`make test` (integration 제외) — **176 passed**.
+`make test` (integration 제외) — **245 passed**.
 
 ## 12. 운영 체크리스트
 
@@ -330,10 +364,12 @@ Calculator 의 Python sandbox 격리는 인프라 후속.
 
 1. ~~Supervisor + Worker 4종 + Send API 병렬~~ — **✅ 완료** (PRD §7.5.2 / §7.5.7)
 2. ~~Human-in-the-Loop interrupt (Clarification + Cost approval)~~ — **✅ 완료** (PRD §7.5.6). sensitive_decision 은 동일 helper 로 후속
-3. **Calculator Python sandbox** — e2b / daytona / 자체 docker 격리 (PRD §7.5.11) — 다음 권장
-4. **Planner LLM 업그레이드** — 현재 룰 기반 DAG → LLM 이 JSON Schema 로 DAG 생성 (PRD §7.5.12)
-5. **Cypher 템플릿 레지스트리** — `tools/cypher_templates.py` + JSON Schema 파라미터 강제 (PRD §7.5.9)
-6. **Pre-synth number guard** — synthesizer 입력에서 미검증 숫자 strip
+3. ~~Cypher 템플릿 레지스트리~~ — **✅ 완료** (PRD §7.5.9). 22 template, param schema 검증
+4. ~~Pre-synth number guard~~ — **✅ 완료** (PRD §7.3). 화이트리스트 + 라벨링
+5. **Calculator Python sandbox** — e2b / daytona / 자체 docker 격리 (PRD §7.5.11) — 다음 권장
+6. **Planner LLM 업그레이드** — 현재 룰 기반 DAG → LLM 이 JSON Schema 로 DAG 생성 (PRD §7.5.12)
 7. **API rate limit** (slowapi) + **audit logging default-on** + **per-agent system prompts 버전 관리**
+8. **`/health` 보강** — embedding · reranker · LLM provider ping 추가
+9. **sensitive_decision interrupt** — 외부 보고용 / 민감 답변 시 동의 확인
 
 각 항목은 별도 PR. 상세는 README §7 로드맵 + PRD §7.5 참조.
