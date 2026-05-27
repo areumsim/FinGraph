@@ -6,7 +6,7 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 
 상세 요구사항은 [PRD.md](./PRD.md) 참조.
 
-> **현재 단계:** Phase 3.5 → Phase 4 진입. 데이터 통합·정합성 1차 구축 완료, RAG 도구·임베딩 백필 진행 중.
+> **현재 단계:** Phase 4.4 완료. Multi-Agent 분리(Supervisor + 4 Worker) + Send API 병렬 + Validator/Replan + PG checkpoint + streaming + tracing. 다음 BLOCKING: Human-in-the-Loop interrupt.
 
 ---
 
@@ -58,9 +58,11 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 ├─ Loaders            : PG/Neo4j 멱등 적재 (P1 deterministic / P2 deterministic / P3 LLM / P4 cross-validate)
 ├─ Tools              : 사전 정의 함수 풀 (financials/graph/retrieve) — 자유 SQL/Cypher 금지
 ├─ Safety             : prompt_safety (XML escape + injection 감지) · cypher_guard (READ-ONLY) · language_guard
-├─ Agents (LangGraph) : Triage → Planner → Executor → Synthesizer → Validator (replan ≤ 2)
-│                       · 세션 메모리 (thread별 TTL/LRU) · checkpoint (chat.checkpoints)
-│                       · streaming (SSE / st.status) · tracing (Langfuse/LangSmith)
+├─ Agents (LangGraph) : Triage → Planner(DAG) → Supervisor ↔ Workers(병렬: research/graph/sql/calculator)
+│                       → Synthesizer → Validator (replan ≤ 2, tasks/result 자동 리셋)
+│                       · Send API 병렬 디스패치 · 세션 메모리 (thread별 TTL/LRU)
+│                       · checkpoint (chat.checkpoints) · streaming (SSE / st.status)
+│                       · tracing (Langfuse/LangSmith)
 └─ API / UI           : FastAPI /chat + /chat/stream, Streamlit 채팅 (node progress · 👍/👎/📝)
 
 [외부 의존성]
@@ -174,6 +176,7 @@ Vector only / Graph only / **Hybrid Agent** / SQL+Vector — 4종 × LLM 3종 = 
 | 4.1 v1/v2 안전 자산 흡수 + Validator·Replan | ✅ | temporal_normalizer, prompt_safety, cypher_guard, language_guard, query_rewriter (coreference), validator + replan loop (max 2), UI title 자동 요약 + 피드백 버튼 |
 | 4.2 LangGraph StateGraph + 세션 메모리 + Fallback recovery | ✅ | 실제 StateGraph + PG/Memory checkpointer, thread별 entity TTL 메모리 (carry-over), executor 빈 결과 시 search_documents 자동 회복 |
 | 4.3 LangGraph 활성화 + Streaming + Tracing | ✅ | `[agent]` extra(langfuse + langsmith), DSN 우선순위 정합성, `chat` 스키마 search_path 주입, `run_agent_stream()` + FastAPI `/chat/stream` SSE, Streamlit `st.status` node progress, tracing fail-soft |
+| 4.4 Multi-Agent 분리 (Supervisor + 4 Worker) + Send API 병렬 | ✅ | Planner→DAG (PRD §7.5.3), Supervisor (의존성·순환검증·budget guard), Research/Graph/SQL/Calculator worker (PRD §7.5.2), langgraph Send 병렬 디스패치 (PRD §7.5.7), Calculator numexpr 안전 evaluator (sandbox 별도) |
 | 4.5 P3/P4 LLM 추출 | 🚧 | extractor engine (병렬+circuit breaker), selective filter (53% 호출 감소), embedding 완료 후 실행 |
 | 5. 평가 + 튜닝 | 🚧 | eval harness 완성 (6 metric × 4 어댑터), gold set 큐레이션 대기 |
 

@@ -1,17 +1,18 @@
 """에이전트 그래프 — LangGraph StateGraph 우선 + 함수 체인 폴백.
 
-PRD §7.5: Triage → Planner → Executor → Synthesizer → Validator (→ replan)
+PRD §7.5: Triage → Planner → Supervisor ↔ Workers (병렬) → Synthesizer → Validator (→ replan)
+PRD §7.5.7: Send API 로 의존성 없는 task 병렬 디스패치 (langgraph 활성 시)
 PRD §7.5.8: PG checkpoint (chat 스키마)
 PRD §7.5.11: Tracing (Langfuse/LangSmith) per node
 PRD §7.6.5: Streaming — UI node-by-node 진행 표시
 
 런타임 분기:
-- langgraph 설치됨 → 실제 StateGraph + conditional_edges (replan) + checkpointer + tracing callbacks
-- langgraph 미설치 → Python 함수 체인 (이전과 동일 동작)
+- langgraph 설치됨 → StateGraph + conditional_edges + Send (병렬) + checkpointer + tracing
+- langgraph 미설치 → Python 함수 체인 (동일 흐름·동일 state)
 
 진입점:
-- run_agent(question, thread_id, history) — 동기 호출 (api /chat 호환)
-- run_agent_stream(question, thread_id, history) — generator, (node_name, partial_state) yield
+- run_agent(question, thread_id, history)            — blocking
+- run_agent_stream(...)                              — generator (node_name, partial_state)
 """
 
 from __future__ import annotations
@@ -21,7 +22,15 @@ from typing import Iterator
 
 from .nodes import executor_node, planner_node, synthesizer_node, triage_node
 from .state import AgentState
+from .supervisor import supervisor_done, supervisor_node, sup_send_directives
 from .validator import MAX_REPLANS, mark_replan, should_replan, validator_node
+from .workers import (
+    calculator_worker,
+    dispatch_one,
+    graph_worker,
+    research_worker,
+    sql_worker,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,17 +46,13 @@ _LG_APP = None   # 컴파일된 LangGraph app 캐시 (lazy)
 
 
 def _route_after_validator(state: AgentState) -> str:
-    """validator → planner (replan) | finalize.
-
-    PRD §7.5.5: n_replans < MAX_REPLANS 이면서 validation_status=failed 일 때만 replan.
-    """
+    """validator → planner (replan) | finalize."""
     if should_replan(state):
         return "replan"
     return "end"
 
 
 def _validator_with_replan_prep(state: AgentState) -> AgentState:
-    """validator 통과 후 replan 으로 분기되는 경우 state 초기화도 함께."""
     state = validator_node(state)
     if should_replan(state):
         state = mark_replan(state)
@@ -55,7 +60,6 @@ def _validator_with_replan_prep(state: AgentState) -> AgentState:
 
 
 def _finalize_failed(state: AgentState) -> AgentState:
-    """MAX_REPLANS 도달 시 사용자에게 검증 실패 신호 노출."""
     if state.get("validation_status") == "failed":
         issues = state.get("validation_issues") or []
         prefix = (
@@ -66,22 +70,83 @@ def _finalize_failed(state: AgentState) -> AgentState:
     return state
 
 
+def _executor_legacy_fallback(state: AgentState) -> AgentState:
+    """tasks DAG 가 비어 있으면 legacy flat plan 으로 실행 (호환).
+
+    Planner 가 새 DAG 를 항상 산출하지만, 외부 호출자 / 테스트가 plan 만
+    지정하는 경우를 위해 호환 경로 유지.
+    """
+    if not state.get("tasks") and state.get("plan"):
+        return executor_node(state)
+    return state
+
+
+# ── LangGraph Send wrappers (병렬 worker 호출용) ─────────────
+def _worker_wrap(worker_fn):
+    """Send 에서 받은 state 의 _current_task 를 꺼내 worker 호출."""
+    def _wrapped(state: AgentState) -> AgentState:
+        task = state.get("_current_task")
+        if task is None:
+            return state
+        # _current_task 은 Send 한정 — 결과 누적 후 제거
+        out_state = worker_fn(state, task)
+        out_state.pop("_current_task", None)
+        return out_state
+    _wrapped.__name__ = f"wrap_{worker_fn.__name__}"
+    return _wrapped
+
+
 def _build_langgraph_app():
-    """LangGraph StateGraph 빌드 + 컴파일. 호출당 1회 (모듈 캐시)."""
     from .checkpointer import get_checkpointer
 
     workflow = StateGraph(AgentState)
     workflow.add_node("triage", triage_node)
     workflow.add_node("planner", planner_node)
-    workflow.add_node("executor", executor_node)
+    # Supervisor 의 두 역할:
+    # - 함수 노드로서 noop (Send 가 routing 처리). 다만 langgraph 가 노드를
+    #   반드시 호출하므로 supervisor_node 를 가벼운 진입점으로 등록.
+    workflow.add_node("supervisor", lambda s: s)
+    workflow.add_node("worker_research", _worker_wrap(research_worker))
+    workflow.add_node("worker_graph", _worker_wrap(graph_worker))
+    workflow.add_node("worker_sql", _worker_wrap(sql_worker))
+    workflow.add_node("worker_calculator", _worker_wrap(calculator_worker))
+    workflow.add_node("executor_legacy", _executor_legacy_fallback)
     workflow.add_node("synthesizer", synthesizer_node)
     workflow.add_node("validator", _validator_with_replan_prep)
     workflow.add_node("finalize", _finalize_failed)
 
     workflow.set_entry_point("triage")
     workflow.add_edge("triage", "planner")
-    workflow.add_edge("planner", "executor")
-    workflow.add_edge("executor", "synthesizer")
+    workflow.add_edge("planner", "supervisor")
+
+    # Supervisor → Send(여러 worker 병렬) | None → executor_legacy/synth 분기
+    def _route_after_sup(state: AgentState):
+        sends = sup_send_directives(state)
+        if sends:
+            return sends
+        # tasks 가 비어 있으면 legacy executor 한 번 거치고 synthesizer 로
+        if not state.get("tasks") and state.get("plan"):
+            return "executor_legacy"
+        return "synthesizer"
+
+    workflow.add_conditional_edges(
+        "supervisor",
+        _route_after_sup,
+        {
+            "worker_research": "worker_research",
+            "worker_graph": "worker_graph",
+            "worker_sql": "worker_sql",
+            "worker_calculator": "worker_calculator",
+            "executor_legacy": "executor_legacy",
+            "synthesizer": "synthesizer",
+        },
+    )
+
+    # 각 worker 종료 후 supervisor 로 복귀 (DAG 의 다음 batch 디스패치)
+    for w in ("worker_research", "worker_graph", "worker_sql", "worker_calculator"):
+        workflow.add_edge(w, "supervisor")
+
+    workflow.add_edge("executor_legacy", "synthesizer")
     workflow.add_edge("synthesizer", "validator")
     workflow.add_conditional_edges(
         "validator",
@@ -92,8 +157,10 @@ def _build_langgraph_app():
 
     checkpointer = get_checkpointer()
     app = workflow.compile(checkpointer=checkpointer)
-    log.info("LangGraph StateGraph compiled (checkpointer=%s)",
-             type(checkpointer).__name__ if checkpointer else "None")
+    log.info(
+        "LangGraph StateGraph compiled (checkpointer=%s, nodes=11, Send-API parallel workers)",
+        type(checkpointer).__name__ if checkpointer else "None",
+    )
     return app
 
 
@@ -105,32 +172,34 @@ def _get_langgraph_app():
 
 
 def _make_run_config(thread_id: str) -> dict:
-    """invoke / stream config — thread_id + tracing callbacks."""
     cfg: dict = {"configurable": {"thread_id": thread_id or "default"}}
     try:
         from .tracing import get_trace_callbacks
         cbs = get_trace_callbacks()
         if cbs:
             cfg["callbacks"] = cbs
-    except Exception as exc:   # noqa: BLE001 — tracing 은 항상 fail-soft
+    except Exception as exc:   # noqa: BLE001
         log.debug("tracing callbacks skip: %s", exc)
     return cfg
 
 
 def _run_with_langgraph(state: AgentState) -> AgentState:
-    """LangGraph StateGraph 실행 (blocking). thread_id 별 checkpoint."""
     app = _get_langgraph_app()
     config = _make_run_config(state.get("thread_id") or "default")
     result = app.invoke(state, config=config)
     return result   # type: ignore[return-value]
 
 
+# ── 폴백 체인 (langgraph 미설치 환경) ──────────────────────────
 def _run_with_fallback_chain(state: AgentState) -> AgentState:
-    """langgraph 미설치 환경 — Python 함수 체인. replan loop 포함."""
     state = triage_node(state)
     while True:
         state = planner_node(state)
-        state = executor_node(state)
+        # Supervisor (함수 모드) — DAG sequential dispatch
+        if state.get("tasks"):
+            state = supervisor_node(state)
+        else:
+            state = _executor_legacy_fallback(state)
         state = synthesizer_node(state)
         state = validator_node(state)
         if not should_replan(state):
@@ -142,13 +211,11 @@ def _run_with_fallback_chain(state: AgentState) -> AgentState:
 def run_agent(question: str, *,
               thread_id: str = "default",
               history: list[dict] | None = None) -> AgentState:
-    """단일 대화 turn 실행. validator failed 시 최대 MAX_REPLANS 회 재계획."""
     state: AgentState = _init_state(question, thread_id, history)
-
     if _HAS_LANGGRAPH:
         try:
             return _run_with_langgraph(state)
-        except Exception as exc:   # noqa: BLE001 — fail-soft, 폴백 체인으로
+        except Exception as exc:   # noqa: BLE001
             log.warning("[run_agent] LangGraph 실행 실패 — 함수 체인 폴백: %s", exc)
             return _run_with_fallback_chain(state)
     return _run_with_fallback_chain(state)
@@ -158,22 +225,17 @@ def run_agent_stream(question: str, *,
                      thread_id: str = "default",
                      history: list[dict] | None = None
                      ) -> Iterator[tuple[str, AgentState]]:
-    """노드 진행 상황을 스트리밍 — UI/SSE 용 (PRD §7.6.5).
+    """노드별 partial state stream — UI/SSE 용 (PRD §7.6.5).
 
-    yield (node_name, partial_state) — 각 노드 종료 후. langgraph stream mode='updates'.
-    마지막에 ('__final__', final_state) 1회.
-
-    langgraph 미설치 환경 → 함수 체인을 노드 단위로 흉내내서 yield.
+    yields (node_name, partial_state). 마지막은 ('__final__', final_state).
     """
     state: AgentState = _init_state(question, thread_id, history)
-
     if _HAS_LANGGRAPH:
         try:
             yield from _stream_with_langgraph(state)
             return
         except Exception as exc:   # noqa: BLE001
             log.warning("[run_agent_stream] LangGraph stream 실패 — 함수 체인 폴백: %s", exc)
-            # 폴백 — 이미 일부 노드는 진행됐을 수 있으나 state 는 안전하게 reset
             state = _init_state(question, thread_id, history)
     yield from _stream_with_fallback_chain(state)
 
@@ -183,7 +245,6 @@ def _stream_with_langgraph(state: AgentState) -> Iterator[tuple[str, AgentState]
     config = _make_run_config(state.get("thread_id") or "default")
     final_state: AgentState = state
     for update in app.stream(state, config=config, stream_mode="updates"):
-        # langgraph 의 update: {node_name: partial_state_dict}
         if not isinstance(update, dict):
             continue
         for node_name, partial in update.items():
@@ -194,14 +255,17 @@ def _stream_with_langgraph(state: AgentState) -> Iterator[tuple[str, AgentState]
 
 
 def _stream_with_fallback_chain(state: AgentState) -> Iterator[tuple[str, AgentState]]:
-    """노드 단위 yield + replan loop."""
     state = triage_node(state)
     yield ("triage", state)
     while True:
         state = planner_node(state)
         yield ("planner", state)
-        state = executor_node(state)
-        yield ("executor", state)
+        if state.get("tasks"):
+            state = supervisor_node(state)
+            yield ("supervisor", state)
+        else:
+            state = _executor_legacy_fallback(state)
+            yield ("executor", state)
         state = synthesizer_node(state)
         yield ("synthesizer", state)
         state = validator_node(state)
@@ -222,6 +286,8 @@ def _init_state(question: str, thread_id: str, history: list[dict] | None) -> Ag
         "llm_usage_usd": 0.0,
         "n_replans": 0,
         "validation_status": "pending",
+        "tasks": [],
+        "task_results": {},
     }
 
 

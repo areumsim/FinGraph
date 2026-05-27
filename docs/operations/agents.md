@@ -15,8 +15,11 @@
 [에이전트 (LangGraph StateGraph)]
   agents/graph.py          — StateGraph 빌드 + run_agent / run_agent_stream
   agents/state.py          — AgentState TypedDict (대화 1 turn 의 누적 상태)
-  agents/nodes.py          — triage / planner / executor / synthesizer
-  agents/validator.py      — validation + replan (n<=2)
+  agents/nodes.py          — triage / planner / synthesizer (+legacy executor)
+  agents/supervisor.py     — DAG 의존성 라우팅 + Send API 병렬 디스패치 (PRD §7.5.7)
+  agents/workers.py        — research / graph / sql / calculator 4 worker (PRD §7.5.2)
+  agents/dag.py            — make_task / unblocked / topologically_valid 헬퍼
+  agents/validator.py      — validation + replan (n<=2, tasks/result 자동 리셋)
   agents/policy.py         — 룰 기반 question_kind 분류, budget 가드
   agents/answering.py      — LLM 비호출 결정적 brief (폴백)
   agents/grounding.py      — 답변 ↔ evidence overlap, citation 검증
@@ -43,7 +46,7 @@
   Neo4j 5.18 + PostgreSQL 16 (pgvector) + (옵션) Qdrant
 ```
 
-## 2. 한 turn 의 실행 흐름
+## 2. 한 turn 의 실행 흐름 (PRD §7.5.2 / §7.5.3 / §7.5.7)
 
 ```
 User Query
@@ -57,22 +60,39 @@ User Query
    └─ session.update — 다음 turn carry-over 용 entity 저장
    ↓
 [Planner] (agents/nodes.py)
-   policy.select_tools(kind) → [{tool, args, purpose}, …]
+   question_kind 별 룰 → state["tasks"]: DAG (PRD §7.5.3)
+     · factual    → SQL × N task (회사당 get_revenue + get_operating_income)
+     · structural → Graph × 3 task (subsidiaries / executives / shareholders)
+     · narrative  → Research × 1 task (search_documents)
+     · multi_hop  → Graph(병렬) → SQL(graph 의존) + Research(병렬)
+   호환: state["plan"] (flat) 도 함께 채움 → tasks 비었을 때 executor 폴백
    ↓
-[Executor] (agents/nodes.py)
-   ├─ 각 step 마다 turn_budget_exceeded 체크
-   ├─ tools.{financials,graph,retrieve} 호출 (Cypher 는 cypher_guard 통과)
-   └─ 결과 비었으면 fallback search_documents 자동 호출 (PRD §7.6.5 회복)
+[Supervisor] (agents/supervisor.py)
+   ├─ dag.topologically_valid — 순환 의존성 검출
+   ├─ dag.unblocked_tasks — depends_on 모두 done 인 pending tasks
+   ├─ langgraph 활성: Send API 로 worker 노드 N개 동시 디스패치 (병렬)
+   └─ 함수 체인: sequential dispatch
+   ↓                                ↑ 모든 task 완료 시 synthesizer
+[Workers] (agents/workers.py)        │
+   research_worker  ───┐             │
+   graph_worker     ───┤  병렬 실행 ┘
+   sql_worker       ───┤  (의존성 없는 task)
+   calculator_worker───┘
+     각 worker:
+     · 자기 도메인 도구만 호출 (sql 은 sql tools, graph 는 graph tools …)
+     · task.status / task.result 갱신 → state.task_results
+     · 실패 시 task.status="failed" — supervisor 가 다른 task 계속
    ↓
 [Synthesizer] (agents/nodes.py)
    ├─ budget_aware_client + cost_tracker (circuit breaker)
-   ├─ LLM chat → 답변 + 인용 마커
+   ├─ tool_results + evidence_chunks → LLM chat
    └─ grounding.verify_answer_grounding — overlap / citation 검증
    ↓
 [Validator] (agents/validator.py)
    ├─ 길이 / 한국어 비율 / grounding / 재무 수치 환각 검사
    ├─ self-reported "정보 부족" 은 통과
-   └─ failed + n_replans<2 → Planner 로 replan (mark_replan: 결과 리셋 + 카운터++)
+   └─ failed + n_replans<2 → Planner 로 replan
+        (mark_replan: tasks / task_results / tool_results / answer 모두 리셋 + 카운터++)
    ↓
 [Finalize]
    replan 한도 도달 시 ⚠️ prefix + validation_issues 노출
@@ -91,14 +111,26 @@ PG 적재 (chat.messages + chat.checkpoints) + UI 렌더 (citations, agent_trace
 | `question_kind` | policy | factual / structural / narrative / multi_hop |
 | `target_companies` | triage | corp_code 목록 |
 | `session_carryover` | triage | 이전 turn entity borrow 여부 |
-| `plan` | planner | `[{tool, args, purpose}]` |
-| `tool_results`, `evidence_chunks` | executor | 도구 출력 |
+| `tasks` | **planner** | **DAG (PRD §7.5.3)** — `[{id, agent, intent, args, depends_on, status, result}]` |
+| `task_results` | supervisor / workers | `task_id → result` append-only |
+| `plan` | planner | legacy flat — tasks 비었을 때 executor 폴백 |
+| `tool_results`, `evidence_chunks` | workers / executor | 도구 출력 누적 |
+| `graph_subgraph` | graph_worker (`get_subgraph`) | 시각화용 |
 | `fallback_used` | executor | 빈 결과 회복 trigger |
 | `aborted_reason` | 어디서나 | `turn_budget` / `synth_budget` / `exception` |
 | `answer`, `citations` | synthesizer | LLM 결과 |
 | `grounding` | synthesizer/validator | overlap·citation 검증 결과 |
 | `validation_status`, `validation_issues` | validator | `passed` / `failed` + 사유 |
 | `n_replans`, `llm_usage_usd` | graph | replan 카운터, 누적 비용 |
+
+`tasks` 각 항목 스키마 (PRD §7.5.3):
+- `id`: 고유 식별자 (planner 가 `g_1`, `sql_2` 등 prefix+seq 로 부여)
+- `agent`: `"research" | "graph" | "sql" | "calculator"`
+- `intent`: worker 안에서 라우팅 키 (graph 의 `list_subsidiaries` / sql 의 `get_revenue` 등)
+- `args`: 도구 호출 파라미터 dict
+- `depends_on`: 이 task 가 시작 전 완료돼야 할 다른 task id 목록
+- `status`: `"pending" | "running" | "done" | "failed" | "skipped"`
+- `result`: worker 가 채우는 도구 출력 (또는 `{"error": ...}`)
 
 ## 4. 노드 진입점
 
@@ -201,8 +233,12 @@ TTL 3600s, LRU 256 (env `FINGRAPH_SESSION_TTL` / `_MAX` 로 조정).
 | checkpointer | `tests/test_checkpointer.py` | DSN 우선순위 / search_path 인코딩 / redact |
 | tracing | `tests/test_tracing.py` | backend 결정 / fail-soft / 캐시 무효화 |
 | stream | `tests/test_stream.py` | 노드 시퀀스 / replan event / partial state 누적 |
+| **dag** | `tests/test_dag.py` | make_task / unblocked / 의존성 / 순환 검출 / filter_by_agent |
+| **workers** | `tests/test_workers.py` | 4 worker × intent 허용·차단·실패·dispatch / Calculator 인젝션 차단 |
+| **supervisor** | `tests/test_supervisor.py` | sequential dispatch / 의존성 순서 / 순환 skip / 예산 차단 / Send 디렉티브 |
+| **planner DAG** | `tests/test_planner_dag.py` | question_kind 별 DAG 구성 / multi_hop 의존성 / year_hint / 빈 plan |
 
-`make test` (integration 제외) — **128 passed**.
+`make test` (integration 제외) — **176 passed**.
 
 ## 12. 운영 체크리스트
 
@@ -236,12 +272,17 @@ make serve-ui
 
 ## 13. 확장 포인트 (다음 PR 후보)
 
-PRD §7.5 9 agents 중 현재 4 (+ Validator) 구현. 다음 단계 권장 순서:
+PRD §7.5 9 agents 중 현재 **Triage / Planner / Supervisor / Research / Graph / SQL / Calculator / Synthesizer / Validator = 9 / 9 구현**.
+Calculator 의 Python sandbox 격리는 인프라 후속.
 
-1. **Supervisor + Worker 4종** (Research / Graph / SQL / Calculator) + Send API 병렬
-2. **Human-in-the-Loop interrupt** — Clarification / 고비용 승인 / 민감 결정 (`langgraph.interrupt`)
-3. **Cypher 템플릿 레지스트리** — `tools/cypher_templates.py` + JSON Schema 파라미터 강제
-4. **Pre-synth number guard** — synthesizer 입력에서 미검증 숫자 strip (validator 보강)
-5. **API rate limit** (slowapi) + **audit logging default-on** + **per-agent system prompts 버전 관리**
+다음 단계 권장 순서:
+
+1. ~~Supervisor + Worker 4종 + Send API 병렬~~ — **✅ 완료** (PRD §7.5.2 / §7.5.7)
+2. **Human-in-the-Loop interrupt** — Clarification / 고비용 승인 / 민감 결정 (`langgraph.interrupt`) — 다음 BLOCKING
+3. **Calculator Python sandbox** — e2b / daytona / 자체 docker 격리 (PRD §7.5.11)
+4. **Planner LLM 업그레이드** — 현재 룰 기반 DAG → LLM 이 JSON Schema 로 DAG 생성 (PRD §7.5.12)
+5. **Cypher 템플릿 레지스트리** — `tools/cypher_templates.py` + JSON Schema 파라미터 강제 (PRD §7.5.9)
+6. **Pre-synth number guard** — synthesizer 입력에서 미검증 숫자 strip
+7. **API rate limit** (slowapi) + **audit logging default-on** + **per-agent system prompts 버전 관리**
 
 각 항목은 별도 PR. 상세는 README §7 로드맵 + PRD §7.5 참조.

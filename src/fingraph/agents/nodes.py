@@ -102,59 +102,123 @@ def triage_node(state: AgentState) -> AgentState:
 
 # ── Planner ─────────────────────────────────────────────────
 def planner_node(state: AgentState) -> AgentState:
-    """질문 유형 + 회사 → 실행 계획. 현재는 룰 기반."""
+    """질문 유형 + 회사 → task DAG (PRD §7.5.2 / §7.5.3).
+
+    룰 기반 1차 구현 (LLM upgrade 는 별도 PR). question_kind 별 패턴:
+      factual    : SQL 단발 (get_revenue/get_op) — 회사 수만큼 병렬
+      structural : Graph 다발 (list_subsidiaries/get_executives/get_major_shareholders) 병렬
+      narrative  : Research 단발
+      multi_hop  : Graph + SQL + Research 조합 — SQL 은 Graph 결과에 의존
+      unknown    : Research 단발 안전 default
+
+    여전히 ``state["plan"]`` (flat list) 도 채워서 executor 폴백 호환.
+    """
+    from .dag import make_task
+
     kind = state.get("question_kind") or "unknown"
     targets = state.get("target_companies") or []
-    tools = select_tools(kind)
+    year_hint = extract_year_hint(state.get("question_rewritten") or state.get("question", ""))
+    q = state.get("question_rewritten") or state.get("question", "")
 
+    tasks: list[dict] = []
+    tid = 0
+
+    def _next_id(prefix: str) -> str:
+        nonlocal tid
+        tid += 1
+        return f"{prefix}{tid}"
+
+    # ── factual: SQL ────────────────────────────────────────
+    if kind == "factual":
+        for cc in targets:
+            tasks.append(make_task(
+                _next_id("sql_"), "sql", "get_revenue",
+                {"corp_code": cc, "year": year_hint},
+            ))
+            tasks.append(make_task(
+                _next_id("sql_"), "sql", "get_operating_income",
+                {"corp_code": cc, "year": year_hint},
+            ))
+
+    # ── structural: Graph 다발 (회사별 병렬) ────────────────
+    elif kind == "structural":
+        for cc in targets:
+            tasks.append(make_task(
+                _next_id("g_"), "graph", "list_subsidiaries",
+                {"parent_corp_code": cc, "limit": 20},
+            ))
+            tasks.append(make_task(
+                _next_id("g_"), "graph", "get_executives",
+                {"corp_code": cc, "limit": 30},
+            ))
+            tasks.append(make_task(
+                _next_id("g_"), "graph", "get_major_shareholders",
+                {"corp_code": cc, "limit": 10},
+            ))
+
+    # ── narrative: Research ────────────────────────────────
+    elif kind == "narrative":
+        if q:
+            tasks.append(make_task(
+                _next_id("r_"), "research", "search_documents",
+                {
+                    "query": q, "top_k": 6,
+                    "corp_code": targets[0] if len(targets) == 1 else (targets or None),
+                    "fiscal_year": year_hint,
+                },
+            ))
+
+    # ── multi_hop: Graph 먼저 → SQL 집계 → Research 보완 ───
+    elif kind == "multi_hop":
+        graph_ids: list[str] = []
+        for cc in targets:
+            gid = _next_id("g_")
+            graph_ids.append(gid)
+            tasks.append(make_task(
+                gid, "graph", "list_subsidiaries",
+                {"parent_corp_code": cc, "limit": 30},
+            ))
+        for cc in targets:
+            # SQL 은 Graph 결과를 보고 corp_code 확정 — 의존성 표현
+            tasks.append(make_task(
+                _next_id("sql_"), "sql", "get_revenue",
+                {"corp_code": cc, "year": year_hint},
+                depends_on=graph_ids,
+            ))
+        if q:
+            tasks.append(make_task(
+                _next_id("r_"), "research", "search_documents",
+                {
+                    "query": q, "top_k": 6,
+                    "corp_code": targets[0] if len(targets) == 1 else (targets or None),
+                    "fiscal_year": year_hint,
+                },
+            ))
+
+    # ── unknown: 안전 default — research ────────────────────
+    else:
+        if q:
+            tasks.append(make_task(
+                _next_id("r_"), "research", "search_documents",
+                {"query": q, "top_k": 6,
+                 "corp_code": targets[0] if len(targets) == 1 else (targets or None)},
+            ))
+
+    state["tasks"] = tasks
+    state["task_results"] = {}
+
+    # 호환용 legacy plan — executor 폴백 (tasks 빈 경우 사용)
     plan: list[dict] = []
-
-    if "lookup_company" in tools and targets:
-        # 이미 triage 에서 식별. plan 에 굳이 안 넣음.
-        pass
-
-    if "list_subsidiaries" in tools and targets:
-        for cc in targets:
-            plan.append({"tool": "list_subsidiaries",
-                         "args": {"parent_corp_code": cc, "limit": 20},
-                         "purpose": "자회사 그래프"})
-
-    if "get_executives" in tools and targets:
-        for cc in targets:
-            plan.append({"tool": "get_executives",
-                         "args": {"corp_code": cc, "limit": 30},
-                         "purpose": "임원진"})
-
-    if "get_companies_of_person" in tools:
-        # 멀티홉 인물 질문 — 룰로 인물명 추출은 어려우므로 사용자가 명시한 경우만 (후속 LLM)
-        pass
-
-    if "get_major_shareholders" in tools and targets:
-        for cc in targets:
-            plan.append({"tool": "get_major_shareholders",
-                         "args": {"corp_code": cc, "limit": 10},
-                         "purpose": "최대주주"})
-
-    if "get_revenue" in tools and targets:
-        year_hint = extract_year_hint(state.get("question_rewritten") or state.get("question", ""))
-        for cc in targets:
-            plan.append({"tool": "get_revenue",
-                         "args": {"corp_code": cc, "year": year_hint},
-                         "purpose": "매출"})
-
-    if "search_documents" in tools and state.get("question"):
+    for t in tasks:
         plan.append({
-            "tool": "search_documents",
-            "args": {
-                "query": state["question"],
-                "top_k": 6,
-                "corp_code": targets[0] if len(targets) == 1 else (targets or None),
-            },
-            "purpose": "본문 의미 검색",
+            "tool": t["intent"],
+            "args": t["args"],
+            "purpose": f"{t['agent']}:{t['intent']}",
         })
-
     state["plan"] = plan
-    log.info(f"[planner] {len(plan)} 단계 plan")
+
+    log.info("[planner] kind=%s targets=%d tasks=%d (DAG)",
+             kind, len(targets), len(tasks))
     return state
 
 

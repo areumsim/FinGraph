@@ -11,6 +11,10 @@ from typing import Any, Literal, TypedDict
 
 QuestionKind = Literal["factual", "narrative", "structural", "multi_hop", "unknown"]
 
+# PRD §7.5.2 / §7.5.3 — Supervisor 가 라우팅하는 worker agent 타입.
+AgentName = Literal["research", "graph", "sql", "calculator"]
+TaskStatus = Literal["pending", "running", "done", "failed", "skipped"]
+
 
 class AgentState(TypedDict, total=False):
     """conversation 한 turn 의 누적 상태."""
@@ -30,10 +34,15 @@ class AgentState(TypedDict, total=False):
     question_kind: QuestionKind
     target_companies: list[str]       # corp_code 목록 (lookup_company 결과)
     session_carryover: bool           # 이번 turn 의 target 이 이전 세션에서 borrow 됐는지
-    plan: list[dict]                  # [{"tool": "list_subsidiaries", "args": {...}, "purpose": "..."}, ...]
+    plan: list[dict]                  # legacy flat plan — tasks 가 비어 있을 때 폴백 executor 가 사용
+    tasks: list[dict]                 # DAG (PRD §7.5.3) — 각 항목:
+                                      #   {"id": str, "agent": AgentName, "intent": str,
+                                      #    "args": dict, "depends_on": list[str],
+                                      #    "status": TaskStatus, "result": Any}
+    task_results: dict                # task_id → result (append-only, supervisor 가 채움)
 
     # 실행 결과
-    tool_results: list[dict]          # 도구별 출력 묶음
+    tool_results: list[dict]          # 도구별 출력 묶음 (legacy + worker 도 push)
     evidence_chunks: list[dict]       # search_documents 결과
     graph_subgraph: dict | None       # 시각화용
     fallback_used: bool               # 빈 결과 회복으로 fallback search_documents 호출됐는지

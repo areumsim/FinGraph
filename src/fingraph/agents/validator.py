@@ -137,11 +137,13 @@ def should_replan(state: AgentState) -> bool:
 
 
 def mark_replan(state: AgentState) -> AgentState:
-    """replan 카운터 증가 + 이전 도구 결과 클리어."""
+    """replan 카운터 증가 + 이전 도구 결과·DAG 클리어 (planner 가 새로 채움)."""
     state["n_replans"] = int(state.get("n_replans") or 0) + 1
     state["tool_results"] = []
     state["evidence_chunks"] = []
     state["plan"] = []
+    state["tasks"] = []
+    state["task_results"] = {}
     state["answer"] = ""
     state["citations"] = []
     state["validation_status"] = "pending"
