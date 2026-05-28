@@ -146,6 +146,21 @@ SET   rel.source_id = 'auto.components',
       rel.snapshot_year = r.snapshot_year
 """
 
+# bridge.corp_entity 의 supplier entity → Neo4j Supplier 노드. 관계 (SUPPLIED_BY) 는
+# 어떤 (vehicle, component) 가 어느 supplier 에 의존하는지 Wikidata P176 등으로 알아야
+# 그릴 수 있어 본 loader 에서는 노드만 적재. corp_code 매칭 정보 (lei/business_no/qid)
+# 가 있는 supplier 만 노드로 — 단순 corp_entity row 가 매핑 정보 충분할 때만.
+MERGE_SUPPLIER = """
+UNWIND $rows AS r
+MERGE (sup:Supplier {wikidata_qid: r.wikidata_qid})
+SET   sup.name = r.name,
+      sup.corp_code = r.corp_code,
+      sup.reviewed_status = r.reviewed_status,
+      sup.confidence_score = r.confidence_score,
+      sup.match_method = r.match_method,
+      sup.updated_at = datetime()
+"""
+
 
 def _fetch_mfr(cur) -> list[dict]:
     cur.execute("""
@@ -222,6 +237,22 @@ def _fetch_components(cur) -> list[dict]:
     } for r in cur.fetchall()]
 
 
+def _fetch_suppliers(cur) -> list[dict]:
+    """bridge.corp_entity 의 entity_type='supplier' row 를 Neo4j Supplier 노드용 dict 로."""
+    cur.execute("""
+        SELECT entity_id AS wikidata_qid, name, corp_code,
+               reviewed_status, confidence_score, match_method
+          FROM bridge.corp_entity
+         WHERE entity_type = 'supplier'
+           AND reviewed_status <> 'rejected'
+    """)
+    return [{
+        "wikidata_qid": r[0], "name": r[1], "corp_code": r[2],
+        "reviewed_status": r[3], "confidence_score": float(r[4]),
+        "match_method": r[5],
+    } for r in cur.fetchall()]
+
+
 def _run_batched(session, cypher: str, rows: list[dict], batch: int) -> int:
     n = 0
     for i in range(0, len(rows), batch):
@@ -242,6 +273,7 @@ def load_all(batch: int = 500) -> dict:
         variants = _fetch_variants(cur)
         recalls = _fetch_recalls(cur)
         components = _fetch_components(cur)
+        suppliers = _fetch_suppliers(cur)
     pg.commit()
 
     driver = get_driver()
@@ -251,6 +283,7 @@ def load_all(batch: int = 500) -> dict:
         out["variants"]      = _run_batched(session, MERGE_VARIANT, variants, batch)
         out["recalls"]       = _run_batched(session, MERGE_RECALL, recalls, batch)
         out["components"]    = _run_batched(session, MERGE_COMPONENT, components, batch)
+        out["suppliers"]     = _run_batched(session, MERGE_SUPPLIER, suppliers, batch)
 
     log.info("[neo4j] loaded %s", out)
     return out

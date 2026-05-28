@@ -135,6 +135,12 @@ def match_suppliers_from_wikidata(cur) -> int:
                 continue
             lei = row.get("lei")
             bizno = row.get("biznoKR")
+            # Wikidata P3320 (사업자등록번호) 일부 row 가 URL/QID 등으로 오염됨 — 한국
+            # 사업자번호 형식 (12자 이하, 숫자/하이픈) 가 아닌 값은 무시.
+            if bizno and (len(bizno) > 40 or bizno.startswith("http")):
+                bizno = None
+            if lei and len(lei) > 20:
+                lei = None
 
             corp_code = None
             method = "name_exact"
