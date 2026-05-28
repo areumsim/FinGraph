@@ -33,8 +33,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from fingraph.config import get_settings
-from fingraph.ingestion._common import CheckpointStore
+from autonexusgraph.config import get_settings
+from autonexusgraph.ingestion._common import CheckpointStore
 from ..config import get_auto_settings
 
 

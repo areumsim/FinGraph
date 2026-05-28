@@ -11,7 +11,7 @@ render_template / _run / cypher_guard 파이프라인을 그대로 통과.
 """
 
 # ── Cypher 템플릿 자동 병합 (import 1회) ─────────────────────
-from fingraph.tools.cypher_templates import TEMPLATES as _FIN_TEMPLATES
+from autonexusgraph.tools.cypher_templates import TEMPLATES as _FIN_TEMPLATES
 from ..cypher_templates_auto import AUTO_TEMPLATES as _AUTO_TEMPLATES
 
 # finance 키와 충돌하면 자동 거부 (autograph 측 키는 'auto_' 접두사 규약).

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from fingraph.agents.rewriter import rewrite_query
+from autonexusgraph.agents.rewriter import rewrite_query
 
 
 def test_no_history_no_call():

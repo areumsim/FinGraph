@@ -8,7 +8,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.loaders import load_financials  # noqa: E402
+from autonexusgraph.loaders import load_financials  # noqa: E402
 
 
 def main() -> int:

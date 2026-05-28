@@ -1,7 +1,7 @@
 """AutoGraph 전용 Cypher 템플릿 — finance 의 ``TEMPLATES`` 와 동일 스키마.
 
 자유 Cypher 금지. 본 모듈 export 인 ``AUTO_TEMPLATES`` 는 finance 의
-``fingraph.tools.cypher_templates.TEMPLATES`` 에 import 시점에 병합됨.
+``autonexusgraph.tools.cypher_templates.TEMPLATES`` 에 import 시점에 병합됨.
 
 키 접두사: ``auto_*`` 로 finance 키와 충돌 회피.
 모든 쿼리는 READ-ONLY (CREATE/MERGE/DELETE 금지).

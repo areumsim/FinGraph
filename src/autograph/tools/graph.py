@@ -12,8 +12,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fingraph.db.neo4j import get_driver
-from fingraph.tools.cypher_templates import render_template
+from autonexusgraph.db.neo4j import get_driver
+from autonexusgraph.tools.cypher_templates import render_template
 
 
 log = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def _cap(limit: int | None) -> int:
 
 def _run(cypher: str, **params: Any) -> list[dict]:
     """READ-only Neo4j 실행. cypher_guard 적용."""
-    from fingraph.safety.cypher_guard import assert_read_only
+    from autonexusgraph.safety.cypher_guard import assert_read_only
     assert_read_only(cypher)
     driver = get_driver()
     with driver.session() as session:

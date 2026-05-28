@@ -35,7 +35,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from fingraph.ingestion._common import (
+from autonexusgraph.ingestion._common import (
     CheckpointStore,
     RateLimiter,
     save_raw,

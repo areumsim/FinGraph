@@ -7,7 +7,7 @@
 - metadata_only: 약관상 메타만 (빅카인즈 등)
 
 사용:
-    from fingraph.ingestion._license import allow_body, LICENSE_POLICY
+    from autonexusgraph.ingestion._license import allow_body, LICENSE_POLICY
     if not allow_body("news_yonhap"):
         payload.pop("body", None)
 """

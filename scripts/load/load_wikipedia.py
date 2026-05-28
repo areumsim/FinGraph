@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_pool
-from fingraph.ingestion._common import normalize_corp_name
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_pool
+from autonexusgraph.ingestion._common import normalize_corp_name
 
 
 UPSERT_PAGE = """
@@ -140,7 +140,7 @@ def main() -> int:
             cur.executemany(UPSERT_EM, em_rows[i:i + BATCH])
 
     if not args.no_neo4j and neo4j_rows:
-        from fingraph.db.neo4j import get_driver
+        from autonexusgraph.db.neo4j import get_driver
         with get_driver().session() as session:
             for i in range(0, len(neo4j_rows), 200):
                 session.run(NEO4J_UPSERT, rows=neo4j_rows[i:i + 200])

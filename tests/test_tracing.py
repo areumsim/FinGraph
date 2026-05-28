@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fingraph.agents import tracing
+from autonexusgraph.agents import tracing
 
 
 def setup_function(_):

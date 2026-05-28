@@ -25,6 +25,6 @@ def _force_fallback_chain_for_graph_tests(request, monkeypatch):
         return
     if request.node.name == "test_runtime_branch_is_either_langgraph_or_fallback":
         return
-    import fingraph.agents.graph as g
+    import autonexusgraph.agents.graph as g
     monkeypatch.setattr(g, "_HAS_LANGGRAPH", False)
     monkeypatch.setattr(g, "_LG_APP", None)

@@ -18,7 +18,7 @@ import json
 import logging
 from pathlib import Path
 
-from fingraph.ingestion._common import raw_dir, save_raw
+from autonexusgraph.ingestion._common import raw_dir, save_raw
 from ..config import get_auto_settings
 
 

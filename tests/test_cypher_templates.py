@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fingraph.tools.cypher_templates import (
+from autonexusgraph.tools.cypher_templates import (
     TEMPLATES,
     TemplateError,
     list_templates,
@@ -29,7 +29,7 @@ def test_every_template_has_required_keys():
 
 def test_no_write_keywords_in_any_template():
     """레지스트리의 모든 cypher 는 READ-ONLY 여야 함 — cypher_guard 가 잡지만 사전 검증."""
-    from fingraph.safety.cypher_guard import assert_read_only
+    from autonexusgraph.safety.cypher_guard import assert_read_only
     for name, spec in TEMPLATES.items():
         try:
             assert_read_only(spec["cypher"])

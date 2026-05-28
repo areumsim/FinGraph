@@ -17,12 +17,12 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.config import get_settings  # noqa: E402
+from autonexusgraph.config import get_settings  # noqa: E402
 
 
 def _check_neo4j() -> tuple[str, str]:
     try:
-        from fingraph.db import neo4j as nx
+        from autonexusgraph.db import neo4j as nx
         return ("OK", "ping ok") if nx.ping() else ("FAIL", "ping returned False")
     except ImportError as e:
         return ("SKIP", f"neo4j package missing: {e}")
@@ -32,7 +32,7 @@ def _check_neo4j() -> tuple[str, str]:
 
 def _check_postgres() -> tuple[str, str]:
     try:
-        from fingraph.db import postgres as pg
+        from autonexusgraph.db import postgres as pg
         return ("OK", "ping ok") if pg.ping() else ("FAIL", "ping returned False")
     except ImportError as e:
         return ("SKIP", f"psycopg missing: {e}")
@@ -42,11 +42,11 @@ def _check_postgres() -> tuple[str, str]:
 
 def _check_qdrant() -> tuple[str, str]:
     """옵션 — QDRANT_URL 미설정이면 SKIP."""
-    from fingraph.config import get_settings
+    from autonexusgraph.config import get_settings
     if not get_settings().qdrant_url:
         return ("SKIP", "QDRANT_URL 미설정 (minimal 스택 — pgvector 사용)")
     try:
-        from fingraph.db import qdrant as qd
+        from autonexusgraph.db import qdrant as qd
         return ("OK", "ping ok") if qd.ping() else ("FAIL", "ping returned False")
     except ImportError as e:
         return ("SKIP", f"qdrant-client missing: {e}")
@@ -57,7 +57,7 @@ def _check_qdrant() -> tuple[str, str]:
 def _check_pgvector() -> tuple[str, str]:
     """PG 의 vector 확장 활성화 확인."""
     try:
-        from fingraph.db import postgres as pg
+        from autonexusgraph.db import postgres as pg
         conn = pg.get_connection()
         with conn.cursor() as cur:
             cur.execute("SELECT extname FROM pg_extension WHERE extname='vector'")
@@ -73,7 +73,7 @@ def _check_pgvector() -> tuple[str, str]:
 
 def _check_embedding() -> tuple[str, str]:
     try:
-        from fingraph.embeddings import get_embedding_client
+        from autonexusgraph.embeddings import get_embedding_client
         h = get_embedding_client().health()
         if h.get("embed") and h.get("rerank"):
             return ("OK", "embed+rerank up")

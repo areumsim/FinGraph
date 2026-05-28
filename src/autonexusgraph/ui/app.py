@@ -8,7 +8,7 @@
 
 실행:
     pip install streamlit
-    streamlit run src/fingraph/ui/app.py --server.port 8501 \\
+    streamlit run src/autonexusgraph/ui/app.py --server.port 8501 \\
         --server.address 0.0.0.0
 """
 
@@ -26,12 +26,12 @@ if str(_SRC) not in sys.path:
 
 import streamlit as st
 
-from fingraph.ui.storage import (
+from autonexusgraph.ui.storage import (
     get_or_create_thread_id, reset_thread,
     load_history, persist_turn, list_recent_threads,
     set_conversation_title, generate_title_from_question,
 )
-from fingraph.ui.components import (
+from autonexusgraph.ui.components import (
     render_citations, render_grounding_warning, render_agent_trace,
     render_cost_badge, render_provider_info, render_sample_questions,
     render_feedback_buttons, render_progress_chip, node_label,
@@ -137,7 +137,7 @@ if user_input:
     # agent run — 노드별 진행 표시 (PRD §7.6.5) + HITL interrupt (PRD §7.5.6)
     with st.chat_message("assistant"):
         try:
-            from fingraph.agents import run_agent_stream, run_agent_resume_stream
+            from autonexusgraph.agents import run_agent_stream, run_agent_resume_stream
             with st.status("분석 중…", expanded=True) as status:
                 last_state = None
                 interrupted_payload = None

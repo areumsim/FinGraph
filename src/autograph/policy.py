@@ -1,6 +1,6 @@
 """AutoGraph 도메인 라우팅 정책 — 룰 기반 분류 + planner DAG 패턴.
 
-finance 의 ``fingraph.agents.policy`` 와 동일한 인터페이스를 자동차 도메인에 맞춰 제공.
+finance 의 ``autonexusgraph.agents.policy`` 와 동일한 인터페이스를 자동차 도메인에 맞춰 제공.
 
 - ``classify_question_auto(q)`` → AutoQuestionKind
 - ``select_tools_auto(kind)``    → 권장 intent 목록
@@ -106,8 +106,8 @@ def plan_auto_tasks(*, question: str,
                     target_vehicles: list[int] | None = None,
                     target_models: list[int] | None = None,
                     target_makes: list[str] | None = None) -> list[dict]:
-    """auto 도메인 task DAG 생성. tasks 항목은 fingraph.agents.dag.make_task 호환 형식."""
-    from fingraph.agents.dag import make_task
+    """auto 도메인 task DAG 생성. tasks 항목은 autonexusgraph.agents.dag.make_task 호환 형식."""
+    from autonexusgraph.agents.dag import make_task
 
     kind = classify_question_auto(question)
     tasks: list[dict] = []
@@ -212,7 +212,7 @@ def plan_cross_domain_tasks(*, question: str,
     target_makes 가 있으면 manufacturer entity → corp_code 변환을 bridge 로 시도하고,
     그 후 finance get_revenue 를 의존 task 로 건다.
     """
-    from fingraph.agents.dag import make_task
+    from autonexusgraph.agents.dag import make_task
 
     tasks: list[dict] = []
     tid = 0

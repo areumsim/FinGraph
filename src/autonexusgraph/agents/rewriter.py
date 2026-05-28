@@ -1,7 +1,7 @@
 """멀티턴 coreference rewriter — follow-up 질문의 지시어·생략을 이전 turn 컨텍스트로 해소.
 
 흡수: _legacy/v2/src/agent/query_rewriter.py — 단, FinGraph LLM 추상화에 맞춰
-재구성 (`fingraph.llm.LLMClient` 사용).
+재구성 (`autonexusgraph.llm.LLMClient` 사용).
 
 PRD §7.6.2 — Multi-Turn 동작의 핵심:
 - "위에서 답한 회사 중 매출 1조 이상은?" → Planner 가 이전 turn 의 task_results 를 reuse

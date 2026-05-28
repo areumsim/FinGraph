@@ -1,6 +1,6 @@
 # AutoGraph — 자동차 도메인 GraphRAG (PRD v2.0)
 
-FinGraph(금융) 코어 위에 **자동차 제품·부품·리콜·공급망 GraphRAG**를 얹은 추가 도메인.
+AutoNexusGraph(금융) 코어 위에 **자동차 제품·부품·리콜·공급망 GraphRAG**를 얹은 추가 도메인.
 LangGraph multi-agent, PG/Neo4j/pgvector, cost/number/cypher guard 등 핵심 인프라는 그대로
 재사용한다. 새 코드는 `src/autograph/` 별도 패키지로 격리.
 
@@ -63,11 +63,11 @@ NHTSA / Wikidata raw
 
 ## 2.5. 시스템 아키텍처 다이어그램
 
-### 2.5.1 컨테이너 토폴로지 — FinGraph 인프라 공유
+### 2.5.1 컨테이너 토폴로지 — AutoNexusGraph 인프라 공유
 
 ```mermaid
 flowchart TB
-    subgraph DATA["데이터 계층 (FinGraph 와 공유)"]
+    subgraph DATA["데이터 계층 (AutoNexusGraph 와 공유)"]
         PG[("PostgreSQL 16<br/>pgvector<br/>master · fin · auto · bridge · vec.chunks")]
         NEO[("Neo4j 5.18<br/>finance + auto 그래프")]
     end
@@ -164,7 +164,7 @@ flowchart TD
 
     AUTO --> P_AUTO["planner_node →<br/>autograph.policy.plan_auto_tasks<br/>(classify_question_auto: spec/recall/complaint/<br/>supply_chain/compare/narrative)"]
     CROSS --> P_CROSS["planner_node →<br/>plan_cross_domain_tasks<br/>(auto research/graph + bridge_corp_to_entity + finance SQL)"]
-    FIN --> P_FIN["planner_node →<br/>fingraph.agents.policy.plan_tasks<br/>(기존 finance planner — 무수정)"]
+    FIN --> P_FIN["planner_node →<br/>autonexusgraph.agents.policy.plan_tasks<br/>(기존 finance planner — 무수정)"]
 
     P_AUTO & P_CROSS & P_FIN --> SUP["Supervisor<br/>(Send API 병렬 디스패치)"]
     SUP --> WORKERS
@@ -176,7 +176,7 @@ flowchart TD
         WCALC["calculator_worker"]
     end
 
-    WORKERS --> TOOLS["_toolbox_for(state)<br/>intent → autograph.tools.* OR fingraph.tools.*"]
+    WORKERS --> TOOLS["_toolbox_for(state)<br/>intent → autograph.tools.* OR autonexusgraph.tools.*"]
     TOOLS --> VAL["Validator<br/>(replan ≤2)"]
     VAL --> SYN["Synthesizer<br/>+ number_guard (PG 결과만 인용)"]
     SYN --> ANS["Answer + citations"]
@@ -224,11 +224,11 @@ flowchart TD
 make up
 
 # 2) 자동차 마이그레이션 적용 — docker compose 초기화 시 자동 실행되지만, 기존 DB 에는 수동 적용.
-docker compose exec postgres psql -U fingraph -d fingraph \
+docker compose exec postgres psql -U autonexusgraph -d autonexusgraph \
     -f /docker-entrypoint-initdb.d/07_autograph.sql
-docker compose exec postgres psql -U fingraph -d fingraph \
+docker compose exec postgres psql -U autonexusgraph -d autonexusgraph \
     -f /docker-entrypoint-initdb.d/08_bridge.sql
-docker compose exec postgres psql -U fingraph -d fingraph \
+docker compose exec postgres psql -U autonexusgraph -d autonexusgraph \
     -f /docker-entrypoint-initdb.d/09_vec_chunks_auto_meta.sql
 
 # 3) Neo4j 제약/인덱스

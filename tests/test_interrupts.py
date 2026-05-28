@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fingraph.agents.interrupts import (
+from autonexusgraph.agents.interrupts import (
     InterruptUnavailable,
     coerce_clarification_response,
     is_ambiguous_company,

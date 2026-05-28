@@ -21,8 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.db.postgres import get_pool
-from fingraph.ingestion._common import normalize_corp_name
+from autonexusgraph.db.postgres import get_pool
+from autonexusgraph.ingestion._common import normalize_corp_name
 
 
 SELECT_COMPANIES = """

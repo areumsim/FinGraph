@@ -15,11 +15,11 @@ class GraphAdapter(AgentAdapter):
     version = "0.1"
 
     def query(self, question: str, *, domain: str | None = None) -> AgentResponse:  # noqa: ARG002 — graph-only 는 finance 그래프만 본다.
-        from fingraph.agents.policy import classify_question
-        from fingraph.tools.graph import lookup_company, list_subsidiaries, get_executives, get_major_shareholders
-        from fingraph.llm.base import get_llm_client
-        from fingraph.llm.budget_aware import budget_aware_client
-        from fingraph.llm.cost_tracker import BudgetExceeded
+        from autonexusgraph.agents.policy import classify_question
+        from autonexusgraph.tools.graph import lookup_company, list_subsidiaries, get_executives, get_major_shareholders
+        from autonexusgraph.llm.base import get_llm_client
+        from autonexusgraph.llm.budget_aware import budget_aware_client
+        from autonexusgraph.llm.cost_tracker import BudgetExceeded
 
         t0 = time.monotonic()
         kind = classify_question(question)

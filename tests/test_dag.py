@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fingraph.agents.dag import (
+from autonexusgraph.agents.dag import (
     all_done,
     filter_by_agent,
     get_task,

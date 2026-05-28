@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from fingraph.agents import session
+from autonexusgraph.agents import session
 
 
 def setup_function(_):

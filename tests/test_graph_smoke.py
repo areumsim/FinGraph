@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import fingraph.agents.graph as g
-from fingraph.agents.graph import run_agent
+import autonexusgraph.agents.graph as g
+from autonexusgraph.agents.graph import run_agent
 
 
 def test_runtime_branch_is_either_langgraph_or_fallback():
@@ -42,10 +42,10 @@ def test_run_agent_clean_path():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         state = run_agent("삼성전자 매출", thread_id="t-smoke-1")
     assert state["answer"].startswith("정상 답변")
     assert state.get("n_replans", 0) == 0
@@ -81,10 +81,10 @@ def test_run_agent_replan_then_pass():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         state = run_agent("삼성전자 매출", thread_id="t-smoke-2")
     assert state["n_replans"] >= 1
     assert state["validation_status"] == "passed"
@@ -112,10 +112,10 @@ def test_run_agent_replan_exhausted_emits_warning():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         state = run_agent("X", thread_id="t-smoke-3")
     assert state["n_replans"] == 2   # MAX_REPLANS
     assert state["validation_status"] == "failed"

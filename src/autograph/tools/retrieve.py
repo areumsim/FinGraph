@@ -1,6 +1,6 @@
 """AutoGraph 의미 검색 — pgvector + 자동차 메타 필터.
 
-finance 의 ``fingraph.tools.retrieve.search_documents`` 와 동일 인덱스(vec.chunks)를 사용하되,
+finance 의 ``autonexusgraph.tools.retrieve.search_documents`` 와 동일 인덱스(vec.chunks)를 사용하되,
 필터 키가 자동차 도메인용 (manufacturer_id / model_id / variant_id) 으로 확장.
 """
 
@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fingraph.db.postgres import get_pool
-from fingraph.embeddings import EmbeddingError, get_embedding_client
+from autonexusgraph.db.postgres import get_pool
+from autonexusgraph.embeddings import EmbeddingError, get_embedding_client
 
 
 DEFAULT_TOPK = 8

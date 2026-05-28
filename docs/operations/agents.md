@@ -1,6 +1,6 @@
 # 에이전트 운영 가이드
 
-본 문서는 FinGraph 의 LangGraph 기반 에이전트 계층 (PRD §7.5 / §7.6) 의 구조·진입점·
+본 문서는 AutoNexusGraph 의 LangGraph 기반 에이전트 계층 (PRD §7.5 / §7.6) 의 구조·진입점·
 운영 절차를 정리한다. 데이터 적재는 [`data_pipeline.md`](./data_pipeline.md), 도구 API
 스펙은 [`rag_tools.md`](./rag_tools.md) 참조.
 
@@ -55,7 +55,7 @@
 
 ## 1.5. 도메인 라우팅 (`finance` / `auto` / `cross_domain`)
 
-PRD v2.1 부터 단일 에이전트가 **금융 (FinGraph) + 자동차 (AutoGraph) + 둘의 교차** 를 모두 처리.
+PRD v2.1 부터 단일 에이전트가 **금융 (AutoNexusGraph) + 자동차 (AutoGraph) + 둘의 교차** 를 모두 처리.
 도메인 분기는 4 지점에 명시적 — LLM 자유 판단 영역 없음.
 
 ```
@@ -79,7 +79,7 @@ PRD v2.1 부터 단일 에이전트가 **금융 (FinGraph) + 자동차 (AutoGrap
     │     → autograph.policy.plan_cross_domain_tasks(question, target_companies)
     │     · auto research/graph + bridge_corp_to_entity + finance SQL 혼합 DAG
     └─ state["domain"] == "finance" (기본)
-          → fingraph.agents.policy.plan_tasks() — 기존 finance planner
+          → autonexusgraph.agents.policy.plan_tasks() — 기존 finance planner
         │
         ▼
 [3] workers._allowed_intents (agents/workers.py)
@@ -97,12 +97,12 @@ PRD v2.1 부터 단일 에이전트가 **금융 (FinGraph) + 자동차 (AutoGrap
 [4] workers._toolbox_for (agents/workers.py)
     └─ intent 호출 시 import 대상 결정:
           intent ∈ _AUTO_*  → from autograph.tools import {intent}
-          intent ∈ _FIN_*   → from fingraph.tools  import {intent}
+          intent ∈ _FIN_*   → from autonexusgraph.tools  import {intent}
 ```
 
 **Cypher 템플릿 통합**: `autograph.cypher_templates_auto.AUTO_TEMPLATES`
 (`auto_*` 접두사 22개) 는 `autograph.tools` import 시 **1회 side-effect** 로
-`fingraph.tools.cypher_templates.TEMPLATES` 에 병합. 따라서 worker 는
+`autonexusgraph.tools.cypher_templates.TEMPLATES` 에 병합. 따라서 worker 는
 `render_template("auto_recalls_by_variant", ...)` 와 `render_template("list_subsidiaries", ...)`
 를 동일 함수로 호출 — 같은 cypher_guard / param schema 검증 통과.
 
@@ -117,7 +117,7 @@ PRD v2.1 부터 단일 에이전트가 **금융 (FinGraph) + 자동차 (AutoGrap
 
 ```python
 from autograph.policy import route_domain, classify_question_auto
-from fingraph.agents.graph import _init_state
+from autonexusgraph.agents.graph import _init_state
 
 route_domain("Hyundai Sonata 2024 리콜")           # → 'auto'
 route_domain("현대자동차 2024 매출과 그랜저 리콜")  # → 'cross_domain'
@@ -420,7 +420,7 @@ psql $POSTGRES_DSN -c "\dt chat.checkpoint*"
 
 # 3) tracing 활성 확인 (옵션)
 make trace-on
-#   tracing: langsmith project=fingraph key=set
+#   tracing: langsmith project=autonexusgraph key=set
 #     또는 tracing: langfuse host=... keys=set
 
 # 4) 스트리밍 end-to-end (SSE)

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fingraph.agents.dag import make_task
-from fingraph.agents.supervisor import (
+from autonexusgraph.agents.dag import make_task
+from autonexusgraph.agents.supervisor import (
     sup_send_directives,
     supervisor_done,
     supervisor_node,
@@ -62,7 +62,7 @@ def test_supervisor_budget_exceeded_skips_remaining(monkeypatch):
         make_task("b", "calculator", "eval", {"expr": "2"}),
     ]
     s = _state(tasks)
-    with patch("fingraph.agents.supervisor.turn_budget_exceeded", lambda st: True):
+    with patch("autonexusgraph.agents.supervisor.turn_budget_exceeded", lambda st: True):
         supervisor_node(s)
     assert s.get("aborted_reason") == "turn_budget"
     assert all(t["status"] == "skipped" for t in tasks)

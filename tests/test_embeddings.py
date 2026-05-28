@@ -8,13 +8,13 @@ import pytest
 
 
 def test_embed_returns_vectors():
-    from fingraph.embeddings import EmbeddingClient
+    from autonexusgraph.embeddings import EmbeddingClient
 
     fake_resp = MagicMock()
     fake_resp.raise_for_status = MagicMock()
     fake_resp.json.return_value = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
 
-    with patch("fingraph.embeddings.httpx.Client") as mock_httpx:
+    with patch("autonexusgraph.embeddings.httpx.Client") as mock_httpx:
         instance = MagicMock()
         instance.post.return_value = fake_resp
         mock_httpx.return_value = instance
@@ -25,17 +25,17 @@ def test_embed_returns_vectors():
 
 
 def test_embed_empty_short_circuits():
-    from fingraph.embeddings import EmbeddingClient
+    from autonexusgraph.embeddings import EmbeddingClient
 
-    with patch("fingraph.embeddings.httpx.Client"):
+    with patch("autonexusgraph.embeddings.httpx.Client"):
         client = EmbeddingClient()
         assert client.embed([]) == []
 
 
 def test_safe_embed_returns_none_rows_on_failure():
-    from fingraph.embeddings import EmbeddingClient, EmbeddingError
+    from autonexusgraph.embeddings import EmbeddingClient, EmbeddingError
 
-    with patch("fingraph.embeddings.httpx.Client") as mock_httpx:
+    with patch("autonexusgraph.embeddings.httpx.Client") as mock_httpx:
         instance = MagicMock()
         # post 가 예외 발생시키게
         instance.post.side_effect = Exception("connection refused")
@@ -51,7 +51,7 @@ def test_safe_embed_returns_none_rows_on_failure():
 
 
 def test_rerank_parses_scores():
-    from fingraph.embeddings import EmbeddingClient
+    from autonexusgraph.embeddings import EmbeddingClient
 
     fake_resp = MagicMock()
     fake_resp.raise_for_status = MagicMock()
@@ -61,7 +61,7 @@ def test_rerank_parses_scores():
         {"index": 1, "score": 0.1},
     ]
 
-    with patch("fingraph.embeddings.httpx.Client") as mock_httpx:
+    with patch("autonexusgraph.embeddings.httpx.Client") as mock_httpx:
         instance = MagicMock()
         instance.post.return_value = fake_resp
         mock_httpx.return_value = instance
@@ -74,9 +74,9 @@ def test_rerank_parses_scores():
 
 
 def test_health_handles_endpoint_down():
-    from fingraph.embeddings import EmbeddingClient
+    from autonexusgraph.embeddings import EmbeddingClient
 
-    with patch("fingraph.embeddings.httpx.Client") as mock_httpx:
+    with patch("autonexusgraph.embeddings.httpx.Client") as mock_httpx:
         instance = MagicMock()
         instance.get.side_effect = Exception("no")
         mock_httpx.return_value = instance

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fingraph.agents.interrupts import (
+from autonexusgraph.agents.interrupts import (
     InterruptUnavailable,
     coerce_cost_response,
     make_cost_approval_payload,
 )
-from fingraph.agents.nodes import planner_node
+from autonexusgraph.agents.nodes import planner_node
 
 
 # ── helpers ─────────────────────────────────────────────────
@@ -61,10 +61,10 @@ def _planner_state(**extra):
 def test_planner_skips_approval_when_below_threshold(monkeypatch):
     """임계가 높으면 cost_approval interrupt 안 부름."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "100.0")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state()
-    with patch("fingraph.agents.interrupts.request_interrupt") as m_req:
+    with patch("autonexusgraph.agents.interrupts.request_interrupt") as m_req:
         planner_node(state)
     m_req.assert_not_called()
     assert state.get("aborted_reason") is None
@@ -73,10 +73,10 @@ def test_planner_skips_approval_when_below_threshold(monkeypatch):
 def test_planner_calls_interrupt_when_above_threshold(monkeypatch):
     """임계가 낮아 cost approval interrupt 발동 → 승인 시 turn 계속."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state()
-    with patch("fingraph.agents.interrupts.request_interrupt",
+    with patch("autonexusgraph.agents.interrupts.request_interrupt",
                 return_value=True) as m_req:
         planner_node(state)
     m_req.assert_called_once()
@@ -88,10 +88,10 @@ def test_planner_calls_interrupt_when_above_threshold(monkeypatch):
 def test_planner_aborts_on_cost_rejection(monkeypatch):
     """사용자가 거절하면 aborted_reason='cost_rejected'."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state()
-    with patch("fingraph.agents.interrupts.request_interrupt",
+    with patch("autonexusgraph.agents.interrupts.request_interrupt",
                 return_value=False):
         planner_node(state)
     assert state["aborted_reason"] == "cost_rejected"
@@ -101,10 +101,10 @@ def test_planner_aborts_on_cost_rejection(monkeypatch):
 def test_planner_fallback_on_interrupt_unavailable(monkeypatch):
     """langgraph interrupt 미지원 환경 → 자동 통과 + safety_signal."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state()
-    with patch("fingraph.agents.interrupts.request_interrupt",
+    with patch("autonexusgraph.agents.interrupts.request_interrupt",
                 side_effect=InterruptUnavailable("test")):
         planner_node(state)
     # 진행 — aborted 안 됨
@@ -116,10 +116,10 @@ def test_planner_fallback_on_interrupt_unavailable(monkeypatch):
 def test_planner_skips_approval_during_replan(monkeypatch):
     """replan 진행 중에는 사용자에게 또 묻지 않는다 (n_replans>0)."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state(n_replans=1)
-    with patch("fingraph.agents.interrupts.request_interrupt") as m_req:
+    with patch("autonexusgraph.agents.interrupts.request_interrupt") as m_req:
         planner_node(state)
     m_req.assert_not_called()
 
@@ -127,7 +127,7 @@ def test_planner_skips_approval_during_replan(monkeypatch):
 def test_planner_applies_existing_cost_response(monkeypatch):
     """resume 후 planner 재진입 — pending_interrupt + response 이미 있으면 그것을 적용."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state(
         pending_interrupt={
@@ -136,7 +136,7 @@ def test_planner_applies_existing_cost_response(monkeypatch):
         },
         interrupt_response=True,   # 승인
     )
-    with patch("fingraph.agents.interrupts.request_interrupt") as m_req:
+    with patch("autonexusgraph.agents.interrupts.request_interrupt") as m_req:
         planner_node(state)
     # 추가 interrupt 호출 없이 응답 그대로 적용
     m_req.assert_not_called()
@@ -146,7 +146,7 @@ def test_planner_applies_existing_cost_response(monkeypatch):
 
 def test_planner_rejection_response_aborts(monkeypatch):
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.0000001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     state = _planner_state(
         pending_interrupt={"kind": "cost_approval", "estimated_cost_usd": 0.75},

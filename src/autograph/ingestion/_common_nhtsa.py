@@ -12,8 +12,8 @@ from typing import Any
 
 import httpx
 
-from fingraph.config import get_settings
-from fingraph.ingestion._common import RateLimiter, fetch_with_retry
+from autonexusgraph.config import get_settings
+from autonexusgraph.ingestion._common import RateLimiter, fetch_with_retry
 from ..config import get_auto_settings
 
 

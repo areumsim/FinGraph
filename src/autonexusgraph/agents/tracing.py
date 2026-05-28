@@ -50,7 +50,7 @@ def describe_backend() -> str:
         return f"tracing: langfuse host={host} keys={key}"
     if backend == "langsmith":
         key = "set" if os.getenv("LANGSMITH_API_KEY") else "MISSING"
-        proj = os.getenv("LANGSMITH_PROJECT") or "fingraph"
+        proj = os.getenv("LANGSMITH_PROJECT") or "autonexusgraph"
         return f"tracing: langsmith project={proj} key={key}"
     return f"tracing: unknown backend '{backend}'"
 

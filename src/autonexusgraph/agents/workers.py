@@ -111,7 +111,7 @@ def _allowed_intents(state: AgentState, kind: str) -> set[str]:
 def research_worker(state: AgentState, task: dict) -> AgentState:
     """벡터 검색 (pgvector + 메타 필터).
 
-    submodule import 패턴 — 테스트에서 patch('fingraph.tools.retrieve.search_documents')
+    submodule import 패턴 — 테스트에서 patch('autonexusgraph.tools.retrieve.search_documents')
     또는 patch('autograph.tools.retrieve.search_documents_auto') 가 정상 작동하도록.
     """
     from ..tools.retrieve import search_documents, search_by_metadata, get_chunk

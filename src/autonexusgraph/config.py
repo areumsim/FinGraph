@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langsmith_api_key: str = ""
-    langsmith_project: str = "fingraph"
+    langsmith_project: str = "autonexusgraph"
 
     # === 운영 ===
     app_env: Literal["local", "server", "production"] = "local"

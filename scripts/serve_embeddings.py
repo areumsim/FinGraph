@@ -7,7 +7,7 @@
   → sentence-transformers 로 모델 직접 로드 + uvicorn 으로 HTTP 노출이 가장 단순
 
 호환성:
-- TEI 의 /embed, /rerank, /health 엔드포인트와 동일 schema → src/fingraph/embeddings.py 그대로 사용
+- TEI 의 /embed, /rerank, /health 엔드포인트와 동일 schema → src/autonexusgraph/embeddings.py 그대로 사용
 
 사용:
     # 의존성 (최초 1회)

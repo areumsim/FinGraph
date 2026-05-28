@@ -9,7 +9,7 @@ singleton — 프로세스 1회 instance. thread-safe.
 - 시작 시 ops.llm_usage 에 run row 생성, 종료 시 status / 총합 update.
 
 사용 패턴:
-    from fingraph.llm.cost_tracker import get_tracker, BudgetExceeded
+    from autonexusgraph.llm.cost_tracker import get_tracker, BudgetExceeded
 
     tracker = get_tracker(caller='p3_extract', model='gpt-4o-mini')
     try:

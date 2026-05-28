@@ -8,7 +8,7 @@
 응답 메타에 cost_usd / tokens 포함 (사용자 명시 — 모든 호출 비용 가시화).
 
 기동:
-    uvicorn fingraph.api.main:app --host 0.0.0.0 --port 8000
+    uvicorn autonexusgraph.api.main:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations

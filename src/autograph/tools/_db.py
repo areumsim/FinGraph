@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from fingraph.db.postgres import get_connection
+from autonexusgraph.db.postgres import get_connection
 
 
 def query_dicts(sql: str, params: Sequence | dict | None = None) -> list[dict]:

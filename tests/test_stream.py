@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fingraph.agents.graph import run_agent_stream
+from autonexusgraph.agents.graph import run_agent_stream
 
 
 def test_stream_yields_node_sequence_clean_path():
@@ -28,10 +28,10 @@ def test_stream_yields_node_sequence_clean_path():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         events = list(run_agent_stream("삼성전자 매출", thread_id="t-stream-1"))
 
     nodes = [n for n, _ in events]
@@ -70,10 +70,10 @@ def test_stream_replan_emits_replan_event():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         events = list(run_agent_stream("X", thread_id="t-stream-2"))
 
     nodes = [n for n, _ in events]
@@ -108,10 +108,10 @@ def test_stream_partial_state_progresses():
         s["grounding"] = {"ok": True, "warnings": []}
         return s
 
-    with patch("fingraph.agents.graph.triage_node", triage), \
-         patch("fingraph.agents.graph.planner_node", planner), \
-         patch("fingraph.agents.graph.executor_node", executor), \
-         patch("fingraph.agents.graph.synthesizer_node", synth):
+    with patch("autonexusgraph.agents.graph.triage_node", triage), \
+         patch("autonexusgraph.agents.graph.planner_node", planner), \
+         patch("autonexusgraph.agents.graph.executor_node", executor), \
+         patch("autonexusgraph.agents.graph.synthesizer_node", synth):
         events = list(run_agent_stream("자회사·임원진", thread_id="t-stream-3"))
 
     # triage 직후 시점의 target_companies 가 있어야 함

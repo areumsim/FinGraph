@@ -2,5 +2,5 @@
 
 실행:
     pip install streamlit
-    streamlit run src/fingraph/ui/app.py --server.port 8501
+    streamlit run src/autonexusgraph/ui/app.py --server.port 8501
 """

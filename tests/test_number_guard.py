@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fingraph.agents.number_guard import (
+from autonexusgraph.agents.number_guard import (
     _BIG_NUMBER_RE,
     collect_approved_numbers,
     format_approved_for_prompt,

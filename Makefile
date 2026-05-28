@@ -68,15 +68,15 @@ install-agent:                                       # langgraph + tracing 의�
 enable-langgraph:                                    # 활성화 헬스체크
 	@$(PYTHON) -c "from langgraph.graph import StateGraph; print('✓ langgraph import 성공')" || \
 	    (echo '✗ langgraph 미설치 — make install-agent 먼저 실행' && exit 1)
-	@$(PYTHON) -c "from fingraph.agents.graph import _HAS_LANGGRAPH; \
+	@$(PYTHON) -c "from autonexusgraph.agents.graph import _HAS_LANGGRAPH; \
 	    print(f'✓ _HAS_LANGGRAPH = {_HAS_LANGGRAPH}')"
-	@$(PYTHON) -c "from fingraph.agents.checkpointer import get_checkpointer; \
+	@$(PYTHON) -c "from autonexusgraph.agents.checkpointer import get_checkpointer; \
 	    c = get_checkpointer(); \
 	    print(f'✓ checkpointer = {type(c).__name__ if c else None}')"
 
 trace-on:                                            # 환경변수로 tracing 활성 확인
 	@echo "TRACE_BACKEND=$${TRACE_BACKEND:-(unset)}"
-	@$(PYTHON) -c "from fingraph.agents.tracing import describe_backend; print(describe_backend())"
+	@$(PYTHON) -c "from autonexusgraph.agents.tracing import describe_backend; print(describe_backend())"
 
 trace-off:                                           # tracing 비활성 — 환경변수만 unset 안내
 	@echo "TRACE_BACKEND 을 빈 값으로 두거나 'none' 으로 설정하세요. (.env 또는 export TRACE_BACKEND=)"
@@ -193,10 +193,10 @@ embed-chunks:                                        # vec.chunks.embedding 채�
 
 # ── API + Web UI ────────────────────────────────────────────────────────────
 serve-api:                                           # FastAPI /chat 엔드포인트
-	$(PYTHON) -m uvicorn fingraph.api.main:app --host 0.0.0.0 --port 31020 --reload
+	$(PYTHON) -m uvicorn autonexusgraph.api.main:app --host 0.0.0.0 --port 31020 --reload
 
 serve-ui:                                            # Streamlit 채팅 UI
-	streamlit run src/fingraph/ui/app.py --server.port 31021 --server.address 0.0.0.0
+	streamlit run src/autonexusgraph/ui/app.py --server.port 31021 --server.address 0.0.0.0
 
 # ── 평가 ────────────────────────────────────────────────────────────────────
 eval-smoke:                                          # 3 row 빠른 검증

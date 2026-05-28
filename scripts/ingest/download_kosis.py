@@ -23,8 +23,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.ingestion._common import (
+from autonexusgraph.config import get_settings
+from autonexusgraph.ingestion._common import (
     CheckpointStore, fetch_with_retry, get_rate_limiter, save_raw,
 )
 
@@ -51,7 +51,7 @@ def main() -> int:
         print("우선 스크립트만 준비됨. 키 확보 후 동일 명령 재실행.")
         return 1
 
-    from fingraph.ingestion.kosis_client import KosisClient  # 키 있을 때만 import
+    from autonexusgraph.ingestion.kosis_client import KosisClient  # 키 있을 때만 import
 
     wanted = {x.strip() for x in args.series.split(",") if x.strip() in SERIES}
     if not wanted:

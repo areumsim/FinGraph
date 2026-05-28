@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fingraph.agents.dag import make_task
-from fingraph.agents.workers import (
+from autonexusgraph.agents.dag import make_task
+from autonexusgraph.agents.workers import (
     calculator_worker,
     dispatch_one,
     graph_worker,
@@ -23,7 +23,7 @@ def _make_state(tasks):
 def test_research_search_documents():
     task = make_task("r1", "research", "search_documents", {"query": "삼성", "top_k": 3})
     state = _make_state([task])
-    with patch("fingraph.tools.retrieve.search_documents",
+    with patch("autonexusgraph.tools.retrieve.search_documents",
                 lambda **kw: [{"id": "c1", "text": "본문"}]):
         research_worker(state, task)
     assert task["status"] == "done"
@@ -34,7 +34,7 @@ def test_research_search_documents():
 def test_research_unknown_intent_falls_back_to_search():
     task = make_task("r2", "research", "weird_intent", {"query": "x"})
     state = _make_state([task])
-    with patch("fingraph.tools.retrieve.search_documents",
+    with patch("autonexusgraph.tools.retrieve.search_documents",
                 lambda **kw: [{"id": "c1"}]):
         research_worker(state, task)
     assert task["status"] == "done"
@@ -45,7 +45,7 @@ def test_research_failure_marks_task_failed():
     state = _make_state([task])
     def _boom(**kw):
         raise RuntimeError("db down")
-    with patch("fingraph.tools.retrieve.search_documents", _boom):
+    with patch("autonexusgraph.tools.retrieve.search_documents", _boom):
         research_worker(state, task)
     assert task["status"] == "failed"
     assert "error" in task["result"]
@@ -55,7 +55,7 @@ def test_research_failure_marks_task_failed():
 def test_graph_allowed_intent():
     task = make_task("g1", "graph", "list_subsidiaries", {"parent_corp_code": "00126380"})
     state = _make_state([task])
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(toolbox, "list_subsidiaries",
                        lambda **kw: [{"child_name": "삼성디스플레이"}], create=True):
         graph_worker(state, task)
@@ -73,7 +73,7 @@ def test_graph_disallowed_intent_skipped():
 def test_graph_subgraph_populates_state():
     task = make_task("g3", "graph", "get_subgraph", {"corp_code": "x", "depth": 1})
     state = _make_state([task])
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(toolbox, "get_subgraph",
                        lambda **kw: {"nodes": [], "edges": []}, create=True):
         graph_worker(state, task)
@@ -84,7 +84,7 @@ def test_graph_subgraph_populates_state():
 def test_sql_allowed_intent():
     task = make_task("s1", "sql", "get_revenue", {"corp_code": "00126380", "year": 2023})
     state = _make_state([task])
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(toolbox, "get_revenue",
                        lambda **kw: {"value": 258_935_500_000_000}, create=True):
         sql_worker(state, task)

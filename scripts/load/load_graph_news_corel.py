@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.db.postgres import get_pool
+from autonexusgraph.db.postgres import get_pool
 
 
 CYPHER = """
@@ -90,7 +90,7 @@ def main() -> int:
             print("  ", r)
         return 0
 
-    from fingraph.db.neo4j import get_driver
+    from autonexusgraph.db.neo4j import get_driver
     with get_driver().session() as session:
         for i in range(0, len(rows), 200):
             session.run(CYPHER, rows=rows[i:i + 200])

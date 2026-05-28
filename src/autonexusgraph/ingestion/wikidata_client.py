@@ -14,7 +14,7 @@
 - 회사별 상세 속성은 별도 쿼리 (또는 wbgetentities API)
 
 호출 패턴:
-    from fingraph.ingestion.wikidata_client import WikidataClient
+    from autonexusgraph.ingestion.wikidata_client import WikidataClient
     with WikidataClient() as wd:
         candidates = wd.fetch_korean_listed_companies()
         # 또는

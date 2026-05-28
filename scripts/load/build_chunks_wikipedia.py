@@ -20,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_pool
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_pool
 
 
 SQL_DELETE_PREV = """

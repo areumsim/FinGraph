@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from fingraph.agents import checkpointer
+from autonexusgraph.agents import checkpointer
 
 
 def test_search_path_injection_no_query():

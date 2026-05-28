@@ -33,8 +33,8 @@ from __future__ import annotations
 import argparse
 import logging
 
-from fingraph.db.neo4j import get_driver
-from fingraph.db.postgres import get_connection
+from autonexusgraph.db.neo4j import get_driver
+from autonexusgraph.db.postgres import get_connection
 
 
 log = logging.getLogger(__name__)

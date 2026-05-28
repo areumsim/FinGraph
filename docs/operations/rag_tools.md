@@ -1,6 +1,6 @@
 # RAG / 에이전트 도구 가이드
 
-`src/fingraph/tools/` 의 사전 정의 함수들은 LLM 에이전트가 호출하는 인터페이스다.
+`src/autonexusgraph/tools/` 의 사전 정의 함수들은 LLM 에이전트가 호출하는 인터페이스다.
 자유 SQL/Cypher/벡터 호출은 모두 금지(PRD §7.5.10). 함수명 + 파라미터만 LLM 이 결정.
 
 ## 모듈 구성
@@ -147,7 +147,7 @@ subs = list_subsidiaries("00126380", limit=200)
 
 ### 3) "이재용이 임원인 회사의 영업이익 합"
 ```python
-from fingraph.tools.financials import get_operating_income
+from autonexusgraph.tools.financials import get_operating_income
 companies = get_companies_of_person("이재용")
 total = 0
 for c in companies:

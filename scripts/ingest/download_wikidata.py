@@ -23,12 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_pool
-from fingraph.ingestion._common import (
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_pool
+from autonexusgraph.ingestion._common import (
     CheckpointStore, RateLimiter, fetch_with_retry, get_rate_limiter, save_raw,
 )
-from fingraph.ingestion.wikidata_client import WikidataClient
+from autonexusgraph.ingestion.wikidata_client import WikidataClient
 
 
 SELECT_TICKERS = """
@@ -78,7 +78,7 @@ def step_a(force: bool = False) -> dict[str, str]:
     # (4) label_en 정규화 (0.75)
     # 한 corp_code 에 더 강한 매칭이 있으면 약한 것 덮어쓰기 안 함.
     import re
-    from fingraph.ingestion._common import normalize_corp_name
+    from autonexusgraph.ingestion._common import normalize_corp_name
 
     name_to_corp = {}
     with pool.connection() as conn, conn.cursor() as cur:

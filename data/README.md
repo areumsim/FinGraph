@@ -1,6 +1,6 @@
 # data/
 
-FinGraph 데이터 작업 디렉토리. 본 폴더 내부 파일은 git 추적 외 (`.gitignore`).
+AutoNexusGraph 데이터 작업 디렉토리. 본 폴더 내부 파일은 git 추적 외 (`.gitignore`).
 폴더 골격만 `.gitkeep` 으로 유지.
 
 ## 레이아웃

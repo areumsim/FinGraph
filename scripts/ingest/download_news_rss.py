@@ -26,11 +26,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.ingestion._common import (
+from autonexusgraph.ingestion._common import (
     CheckpointStore, fetch_with_retry, get_rate_limiter, save_raw,
 )
-from fingraph.ingestion._license import policy
-from fingraph.ingestion.news_client import KOREAN_FEEDS, NewsRssClient
+from autonexusgraph.ingestion._license import policy
+from autonexusgraph.ingestion.news_client import KOREAN_FEEDS, NewsRssClient
 
 
 def _article_hash(source: str, link: str) -> str:

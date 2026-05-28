@@ -1,6 +1,6 @@
 # 데이터 파이프라인 운영 가이드
 
-본 문서는 FinGraph 의 raw → processed → DB 3-tier 멱등 파이프라인을 단계별로 안내한다.
+본 문서는 AutoNexusGraph 의 raw → processed → DB 3-tier 멱등 파이프라인을 단계별로 안내한다.
 각 단계는 앞 단계의 raw 가 있다면 언제든 재실행 가능 (멱등). 도중 끊겨도 `state/` 의 done/failed
 체크포인트로 이어받기. 모든 적재 PG `INSERT ... ON CONFLICT DO UPDATE`, Neo4j `MERGE`.
 
@@ -162,7 +162,7 @@ make validate-quality         # 매핑 커버리지 점검
 
 ## 라이선스 정책 (자동 강제)
 
-`src/fingraph/ingestion/_license.py` 의 `LICENSE_POLICY` 가 source 키별 본문 저장 여부를 강제.
+`src/autonexusgraph/ingestion/_license.py` 의 `LICENSE_POLICY` 가 source 키별 본문 저장 여부를 강제.
 `save_raw()` 호출 시 정책 확인 → `copyrighted` / `metadata_only` 이면 본문 필드 자동 strip.
 
 | Tier | 예시 source | 본문 저장 |

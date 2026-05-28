@@ -1,6 +1,6 @@
 """AutoGraph 전용 설정 — finance Settings 를 share 하고 자동차 소스 키만 추가.
 
-finance 의 ``fingraph.config.get_settings()`` 와 동일 .env 를 읽는다. extra='ignore' 라
+finance 의 ``autonexusgraph.config.get_settings()`` 와 동일 .env 를 읽는다. extra='ignore' 라
 finance Settings 가 모르는 키도 통과. 본 모듈은 AutoGraph 키만 묶어 노출.
 """
 

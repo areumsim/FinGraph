@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from fingraph.ingestion._common import (
+from autonexusgraph.ingestion._common import (
     CheckpointStore,
     RateLimiter,
     save_raw,

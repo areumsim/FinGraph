@@ -16,7 +16,7 @@ class HybridAdapter(AgentAdapter):
 
     def query(self, question: str, *,
               domain: str | None = None) -> AgentResponse:
-        from fingraph.agents import run_agent
+        from autonexusgraph.agents import run_agent
 
         t0 = time.monotonic()
         try:

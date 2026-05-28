@@ -1,7 +1,7 @@
 """JSONL → PostgreSQL 적재 로더.
 
 사용:
-    from fingraph.loaders import load_companies, load_filings, load_financials
+    from autonexusgraph.loaders import load_companies, load_filings, load_financials
 
 각 로더는:
 - batch INSERT ... ON CONFLICT DO UPDATE (idempotent)

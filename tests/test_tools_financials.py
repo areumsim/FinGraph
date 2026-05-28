@@ -10,7 +10,7 @@ import pytest
 @pytest.fixture
 def mock_conn():
     """get_connection 을 mock 해서 cursor 동작 시뮬레이션."""
-    with patch("fingraph.tools.financials.get_connection") as gc:
+    with patch("autonexusgraph.tools.financials.get_connection") as gc:
         conn = MagicMock()
         cur = MagicMock()
         cur.__enter__ = MagicMock(return_value=cur)
@@ -21,7 +21,7 @@ def mock_conn():
 
 
 def test_lookup_company_returns_score(mock_conn):
-    from fingraph.tools.financials import lookup_company
+    from autonexusgraph.tools.financials import lookup_company
 
     mock_conn.fetchall.return_value = [
         ("00126380", "삼성전자(주)", "005930", "KOSPI", 60),
@@ -33,21 +33,21 @@ def test_lookup_company_returns_score(mock_conn):
 
 
 def test_lookup_empty_query():
-    from fingraph.tools.financials import lookup_company
+    from autonexusgraph.tools.financials import lookup_company
 
     assert lookup_company("") == []
     assert lookup_company(None) == []  # type: ignore[arg-type]
 
 
 def test_get_revenue_handles_none(mock_conn):
-    from fingraph.tools.financials import get_revenue
+    from autonexusgraph.tools.financials import get_revenue
 
     mock_conn.fetchone.return_value = None
     assert get_revenue("XX", 2023) is None
 
 
 def test_get_revenue_returns_dict(mock_conn):
-    from fingraph.tools.financials import get_revenue
+    from autonexusgraph.tools.financials import get_revenue
 
     mock_conn.fetchone.return_value = (
         "영업수익", 258_935_494_000_000, 250_000_000_000_000, "CFS", "IS", "11011",
@@ -60,7 +60,7 @@ def test_get_revenue_returns_dict(mock_conn):
 
 def test_get_balance_sheet_item_normalizes_alias(mock_conn):
     """item='총자산' → 자산총계 후보로 매핑."""
-    from fingraph.tools.financials import get_balance_sheet_item
+    from autonexusgraph.tools.financials import get_balance_sheet_item
 
     mock_conn.fetchone.return_value = (
         "자산총계", 455_905_980_000_000, None, "CFS", "BS", "11011",
@@ -70,7 +70,7 @@ def test_get_balance_sheet_item_normalizes_alias(mock_conn):
 
 
 def test_compare_companies_invalid_metric():
-    from fingraph.tools.financials import compare_companies
+    from autonexusgraph.tools.financials import compare_companies
 
     with pytest.raises(ValueError, match="unknown metric"):
         compare_companies(["X"], 2023, "invalid_metric")
@@ -78,7 +78,7 @@ def test_compare_companies_invalid_metric():
 
 def test_compare_companies_sorts_desc(mock_conn):
     """다중 회사 시 None 은 뒤로, 값은 내림차순."""
-    from fingraph.tools.financials import compare_companies
+    from autonexusgraph.tools.financials import compare_companies
 
     # get_company_info 와 get_revenue 둘 다 호출됨 — 호출 횟수에 따라 다른 응답
     call_log = []

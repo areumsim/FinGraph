@@ -20,8 +20,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.config import get_settings  # noqa: E402
-from fingraph.ingestion.ecos_client import KEY_STATS, EcosClient  # noqa: E402
+from autonexusgraph.config import get_settings  # noqa: E402
+from autonexusgraph.ingestion.ecos_client import KEY_STATS, EcosClient  # noqa: E402
 
 
 def _format_date_for_cycle(d: date, cycle: str) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from fingraph.agents.nodes import executor_node
+from autonexusgraph.agents.nodes import executor_node
 
 
 def _state(plan: list[dict], **extra) -> dict:
@@ -34,7 +34,7 @@ def test_fallback_search_when_all_empty():
              "text": "본문...", "score": 0.9, "section": "사업"}
         ]
 
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(toolbox, "list_subsidiaries", fake_subs, create=True), \
          patch.object(toolbox, "search_documents", fake_search, create=True):
         out = executor_node(_state(plan))
@@ -49,7 +49,7 @@ def test_no_fallback_when_search_already_in_plan():
     plan = [
         {"tool": "search_documents", "args": {"query": "X"}, "purpose": "x"},
     ]
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(toolbox, "search_documents", lambda **k: [], create=True):
         out = executor_node(_state(plan))
     assert out.get("fallback_used") is not True
@@ -63,7 +63,7 @@ def test_no_fallback_when_results_present():
         {"tool": "list_subsidiaries", "args": {"parent_corp_code": "00126380"},
          "purpose": "x"},
     ]
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
     with patch.object(
         toolbox, "list_subsidiaries",
         lambda **k: [{"child_name": "삼성디스플레이"}],
@@ -80,11 +80,11 @@ def test_no_fallback_when_budget_exceeded():
         {"tool": "list_subsidiaries", "args": {"parent_corp_code": "00126380"},
          "purpose": "x"},
     ]
-    import fingraph.tools as toolbox
+    import autonexusgraph.tools as toolbox
 
     # 빈 결과 + 예산 초과 → break 후 fallback 우회
     with patch.object(toolbox, "list_subsidiaries", lambda **k: [], create=True), \
-         patch("fingraph.agents.nodes.turn_budget_exceeded", lambda s: True):
+         patch("autonexusgraph.agents.nodes.turn_budget_exceeded", lambda s: True):
         out = executor_node(_state(plan))
     assert out.get("aborted_reason") == "turn_budget"
     assert out.get("fallback_used") is not True

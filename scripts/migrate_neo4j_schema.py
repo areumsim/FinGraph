@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.db.neo4j import get_driver
+from autonexusgraph.db.neo4j import get_driver
 
 
 MIGRATIONS = [

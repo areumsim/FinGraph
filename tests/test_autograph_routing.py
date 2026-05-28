@@ -14,9 +14,9 @@ import pytest
 
 # ── 1. cypher_templates 자동 병합 ─────────────────────────
 def test_auto_templates_merged_into_finance_registry():
-    # autograph.tools import 시 fingraph.tools.cypher_templates.TEMPLATES 에 병합돼야 함.
+    # autograph.tools import 시 autonexusgraph.tools.cypher_templates.TEMPLATES 에 병합돼야 함.
     import autograph.tools  # noqa: F401 — side-effect 가 핵심
-    from fingraph.tools.cypher_templates import TEMPLATES
+    from autonexusgraph.tools.cypher_templates import TEMPLATES
 
     assert "auto_lookup_vehicle" in TEMPLATES
     assert "auto_recalls_by_variant" in TEMPLATES
@@ -28,7 +28,7 @@ def test_auto_templates_merged_into_finance_registry():
 
 def test_auto_template_param_validation():
     import autograph.tools  # noqa: F401
-    from fingraph.tools.cypher_templates import TemplateError, render_template
+    from autonexusgraph.tools.cypher_templates import TemplateError, render_template
 
     # 정상 — int variant_id + limit
     cypher, bind = render_template("auto_recalls_by_variant",
@@ -106,7 +106,7 @@ def test_plan_cross_domain_includes_finance_sql_and_auto_research():
 
 # ── 4. planner_node 위임 (도메인 분기) ───────────────────
 def test_planner_node_routes_to_auto_branch():
-    from fingraph.agents.nodes import planner_node
+    from autonexusgraph.agents.nodes import planner_node
 
     state = {
         "question": "Hyundai Sonata 2024 리콜",
@@ -127,7 +127,7 @@ def test_planner_node_routes_to_auto_branch():
 
 def test_planner_node_finance_unaffected_when_no_domain():
     """domain 미지정 시 router 가 finance 로 판정 → 기존 finance planner 분기."""
-    from fingraph.agents.nodes import planner_node
+    from autonexusgraph.agents.nodes import planner_node
 
     state = {
         "question": "삼성전자 2024년 매출",
@@ -147,7 +147,7 @@ def test_planner_node_finance_unaffected_when_no_domain():
 # ── 5. workers 도메인 분기 ─────────────────────────────────
 def test_graph_worker_rejects_finance_intent_in_auto_domain():
     """auto 도메인에서 finance graph intent (list_subsidiaries) 는 거절돼야."""
-    from fingraph.agents.workers import graph_worker
+    from autonexusgraph.agents.workers import graph_worker
     state = {"domain": "auto", "tasks": [], "task_results": {}, "tool_results": []}
     task = {"id": "t1", "agent": "graph", "intent": "list_subsidiaries",
             "args": {}, "depends_on": [], "status": "pending", "result": None}
@@ -158,7 +158,7 @@ def test_graph_worker_rejects_finance_intent_in_auto_domain():
 
 def test_sql_worker_accepts_lookup_vehicle_in_auto_domain():
     """auto 도메인에서 sql intent 'lookup_vehicle' 이 허용목록에 있는지만 검증 (실호출은 mock)."""
-    from fingraph.agents import workers as W
+    from autonexusgraph.agents import workers as W
     state = {"domain": "auto", "tasks": [], "task_results": {}, "tool_results": []}
     allowed = W._allowed_intents(state, "sql")
     assert "lookup_vehicle" in allowed
@@ -169,7 +169,7 @@ def test_sql_worker_accepts_lookup_vehicle_in_auto_domain():
 
 
 def test_cross_domain_allowed_includes_both():
-    from fingraph.agents import workers as W
+    from autonexusgraph.agents import workers as W
     state = {"domain": "cross_domain"}
     sql_allowed = W._allowed_intents(state, "sql")
     assert "get_revenue" in sql_allowed
@@ -181,7 +181,7 @@ def test_cross_domain_allowed_includes_both():
 
 # ── 6. _init_state ──────────────────────────────────────
 def test_init_state_auto_detects_domain():
-    from fingraph.agents.graph import _init_state
+    from autonexusgraph.agents.graph import _init_state
     s_fin = _init_state("삼성전자 매출", "tid", None)
     assert s_fin["domain"] == "finance"
     s_auto = _init_state("현대 그랜저 변속기", "tid", None)

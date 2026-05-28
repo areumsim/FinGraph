@@ -6,7 +6,7 @@
 - 천천히 안 터지게: rate-limit + exponential backoff + checkpoint resume.
 
 사용:
-    from fingraph.ingestion._common import RateLimiter, CheckpointStore, save_raw, fetch_with_retry
+    from autonexusgraph.ingestion._common import RateLimiter, CheckpointStore, save_raw, fetch_with_retry
 
     limiter = RateLimiter(per_sec=1.0)           # Wikidata 같이 느린 API
     ckpt = CheckpointStore("wikidata")

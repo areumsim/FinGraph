@@ -18,10 +18,10 @@ class VectorAdapter(AgentAdapter):
         self.top_k = top_k
 
     def query(self, question: str, *, domain: str | None = None) -> AgentResponse:  # noqa: ARG002 — vector-only 는 도메인 무관.
-        from fingraph.tools.retrieve import search_documents
-        from fingraph.llm.base import get_llm_client
-        from fingraph.llm.budget_aware import budget_aware_client
-        from fingraph.llm.cost_tracker import BudgetExceeded
+        from autonexusgraph.tools.retrieve import search_documents
+        from autonexusgraph.llm.base import get_llm_client
+        from autonexusgraph.llm.budget_aware import budget_aware_client
+        from autonexusgraph.llm.cost_tracker import BudgetExceeded
 
         t0 = time.monotonic()
         try:

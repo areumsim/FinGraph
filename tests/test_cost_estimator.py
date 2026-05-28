@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fingraph.agents.cost_estimator import (
+from autonexusgraph.agents.cost_estimator import (
     _approx_tokens,
     estimate_turn_cost,
     needs_cost_approval,
@@ -62,7 +62,7 @@ def test_estimate_includes_replan_factor():
 def test_needs_cost_approval_below_threshold(monkeypatch):
     """임계 위면 False."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "100.00")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     need, est = needs_cost_approval(_state())
     assert need is False
@@ -72,7 +72,7 @@ def test_needs_cost_approval_below_threshold(monkeypatch):
 def test_needs_cost_approval_above_threshold(monkeypatch):
     """임계 아래면 True."""
     monkeypatch.setenv("LLM_COST_AUTO_APPROVE_USD", "0.00001")
-    from fingraph import config
+    from autonexusgraph import config
     config.get_settings.cache_clear()   # type: ignore[attr-defined]
     need, est = needs_cost_approval(_state())
     assert need is True

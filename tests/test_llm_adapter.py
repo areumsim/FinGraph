@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fingraph.llm.base import LLMClient, LLMError, TokenUsage, get_llm_client
+from autonexusgraph.llm.base import LLMClient, LLMError, TokenUsage, get_llm_client
 
 
 def test_token_usage_addition():
@@ -26,7 +26,7 @@ def test_llm_client_is_abstract():
 
 def test_get_llm_client_role_mapping(monkeypatch):
     """role 인자가 settings.llm_model_<role> 로 매핑되는지."""
-    from fingraph.config import get_settings
+    from autonexusgraph.config import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setenv("LLM_PROVIDER", "openai")
@@ -43,7 +43,7 @@ def test_get_llm_client_role_mapping(monkeypatch):
 
 
 def test_get_llm_client_default_model(monkeypatch):
-    from fingraph.config import get_settings
+    from autonexusgraph.config import get_settings
 
     get_settings.cache_clear()
     monkeypatch.setenv("LLM_PROVIDER", "openai")
@@ -56,7 +56,7 @@ def test_get_llm_client_default_model(monkeypatch):
 
 
 def test_get_llm_client_unknown_provider(monkeypatch):
-    from fingraph.config import get_settings
+    from autonexusgraph.config import get_settings
 
     get_settings.cache_clear()
     # Settings 가 Literal validator 로 막아서 ValidationError. 우리 LLMError 도달 X.
@@ -66,7 +66,7 @@ def test_get_llm_client_unknown_provider(monkeypatch):
 
 
 def test_openai_chat_returns_llm_response(monkeypatch):
-    from fingraph.llm.openai_adapter import OpenAIClient
+    from autonexusgraph.llm.openai_adapter import OpenAIClient
 
     fake_resp = MagicMock()
     fake_resp.choices = [MagicMock(message=MagicMock(content="hi"))]
@@ -88,7 +88,7 @@ def test_openai_chat_returns_llm_response(monkeypatch):
 
 def test_anthropic_split_messages():
     """system 메시지를 분리해서 system 인자로 보내는지."""
-    from fingraph.llm.anthropic_adapter import AnthropicClient
+    from autonexusgraph.llm.anthropic_adapter import AnthropicClient
 
     with patch("anthropic.Anthropic"):
         client = AnthropicClient(model="claude-sonnet-4-5", api_key="sk-ant-test")
@@ -106,7 +106,7 @@ def test_anthropic_split_messages():
 
 
 def test_openai_missing_key_raises(monkeypatch):
-    from fingraph.llm.openai_adapter import OpenAIClient
+    from autonexusgraph.llm.openai_adapter import OpenAIClient
 
     with pytest.raises(LLMError, match="api key"):
         OpenAIClient(model="gpt-4o", api_key="")

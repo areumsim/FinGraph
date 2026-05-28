@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from fingraph.agents.temporal import normalize_temporal_terms, extract_year_hint
+from autonexusgraph.agents.temporal import normalize_temporal_terms, extract_year_hint
 
 
 REF = date(2026, 5, 27)   # FINGRAPH/CLAUDE 환경의 currentDate 기준

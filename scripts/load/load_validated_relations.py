@@ -124,8 +124,8 @@ def main() -> int:
     parser.add_argument("--review-conf", type=float, default=0.50)
     args = parser.parse_args()
 
-    from fingraph.config import get_settings
-    from fingraph.extractors.validator import validate_relations
+    from autonexusgraph.config import get_settings
+    from autonexusgraph.extractors.validator import validate_relations
 
     settings = get_settings()
     root = settings.ingest_processed_dir / "extracted"
@@ -158,7 +158,7 @@ def main() -> int:
 
     # 2) discard → ops.quality_checks
     if n_discard:
-        from fingraph.db.postgres import get_pool
+        from autonexusgraph.db.postgres import get_pool
         with get_pool().connection() as conn, conn.cursor() as cur:
             for v in classified["discard"]:
                 cur.execute("""
@@ -180,7 +180,7 @@ def main() -> int:
         return 0
 
     # 3) accept → Neo4j 적재 (relation type 별 batch)
-    from fingraph.db.neo4j import get_driver
+    from autonexusgraph.db.neo4j import get_driver
 
     by_type: dict[str, list[dict]] = {}
     for v in classified["accept"]:

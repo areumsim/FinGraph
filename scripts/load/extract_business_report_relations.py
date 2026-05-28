@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 def _select_top_corps(n: int) -> list[str]:
     """시가총액 상위 N 회사의 corp_code. PoC 범위 제한용."""
-    from fingraph.db.postgres import get_pool
+    from autonexusgraph.db.postgres import get_pool
     with get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute("""
             SELECT corp_code
@@ -50,7 +50,7 @@ def _select_top_corps(n: int) -> list[str]:
 
 def _load_company_names(corps: list[str]) -> dict[str, str]:
     """corp_code → corp_name 룩업 (프롬프트 컨텍스트용)."""
-    from fingraph.db.postgres import get_pool
+    from autonexusgraph.db.postgres import get_pool
     out: dict[str, str] = {}
     if not corps:
         return out
@@ -100,10 +100,10 @@ def main() -> int:
 
     print(f"[P3] target corps: {len(corps)} (sample: {corps[:5]})")
 
-    from fingraph.extractors.llm_relations import (
+    from autonexusgraph.extractors.llm_relations import (
         filter_target_chunks, estimate_p3_cost, load_prompt, extract_one, save_result,
     )
-    from fingraph.config import get_settings
+    from autonexusgraph.config import get_settings
     settings = get_settings()
 
     # 1) 대상 청크 SELECT
@@ -130,7 +130,7 @@ def main() -> int:
         return 0
 
     # 2) 비용 추정 + gate
-    from fingraph.llm.cost import BudgetCheck
+    from autonexusgraph.llm.cost import BudgetCheck
 
     model_name = _resolve_model(settings, args.model_role)
     est = estimate_p3_cost(chunks, model=model_name)
@@ -142,9 +142,9 @@ def main() -> int:
     # gate.review 가 dry_run 이면 SystemExit(0). 통과하면 계속.
 
     # 3) LLM client + tracker
-    from fingraph.llm.base import get_llm_client
-    from fingraph.llm.budget_aware import budget_aware_client
-    from fingraph.llm.cost_tracker import BudgetExceeded, reset_tracker
+    from autonexusgraph.llm.base import get_llm_client
+    from autonexusgraph.llm.budget_aware import budget_aware_client
+    from autonexusgraph.llm.cost_tracker import BudgetExceeded, reset_tracker
 
     reset_tracker()
     inner = get_llm_client(role=args.model_role)

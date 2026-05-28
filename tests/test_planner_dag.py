@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fingraph.agents.nodes import planner_node
+from autonexusgraph.agents.nodes import planner_node
 
 
 def _state(kind, targets=None, q="질문"):

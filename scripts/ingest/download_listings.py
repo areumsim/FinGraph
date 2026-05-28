@@ -20,8 +20,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.config import get_settings  # noqa: E402
-from fingraph.ingestion.krx_client import KrxClient  # noqa: E402
+from autonexusgraph.config import get_settings  # noqa: E402
+from autonexusgraph.ingestion.krx_client import KrxClient  # noqa: E402
 
 
 def _write_listings_csv(listings, path: Path) -> None:
@@ -61,7 +61,7 @@ def main() -> int:
     try:
         client = KrxClient()
     except ImportError as e:
-        print(f"[ERROR] FinanceDataReader 미설치. pip install 'fingraph[ingest]'\n  {e}",
+        print(f"[ERROR] FinanceDataReader 미설치. pip install 'autonexusgraph[ingest]'\n  {e}",
               file=sys.stderr)
         return 2
 

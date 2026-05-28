@@ -11,7 +11,7 @@ import pytest
 
 def test_dart_parse_corp_codes():
     """zip → CorpCode iterator (HTTP 호출 X)."""
-    from fingraph.ingestion.dart_client import DartClient
+    from autonexusgraph.ingestion.dart_client import DartClient
 
     # 가짜 corpCode.xml 생성
     xml = (
@@ -35,7 +35,7 @@ def test_dart_parse_corp_codes():
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("CORPCODE.xml", xml)
 
-    with patch("fingraph.ingestion.dart_client.httpx.Client"):
+    with patch("autonexusgraph.ingestion.dart_client.httpx.Client"):
         client = DartClient(api_key="fake")
         codes = list(client.parse_corp_codes(buf.getvalue()))
 
@@ -47,7 +47,7 @@ def test_dart_parse_corp_codes():
 
 
 def test_dart_client_no_key_raises():
-    from fingraph.ingestion.dart_client import DartClient
+    from autonexusgraph.ingestion.dart_client import DartClient
 
     with pytest.raises(ValueError, match="DART_API_KEY"):
         DartClient(api_key="")
@@ -55,9 +55,9 @@ def test_dart_client_no_key_raises():
 
 def test_dart_rate_limit_throttle():
     """min_interval 이 _throttle 에 반영되는지."""
-    from fingraph.ingestion.dart_client import DartClient
+    from autonexusgraph.ingestion.dart_client import DartClient
 
-    with patch("fingraph.ingestion.dart_client.httpx.Client"):
+    with patch("autonexusgraph.ingestion.dart_client.httpx.Client"):
         c = DartClient(api_key="fake", rate_limit_per_sec=5)
         assert c._min_interval == pytest.approx(0.2)
         c2 = DartClient(api_key="fake", rate_limit_per_sec=0)
@@ -66,7 +66,7 @@ def test_dart_rate_limit_throttle():
 
 def test_ecos_key_stats_keys():
     """사전 정의 지표 목록이 살아 있는지."""
-    from fingraph.ingestion.ecos_client import KEY_STATS
+    from autonexusgraph.ingestion.ecos_client import KEY_STATS
 
     assert "base_rate" in KEY_STATS
     assert "usd_krw" in KEY_STATS
@@ -77,7 +77,7 @@ def test_ecos_key_stats_keys():
 
 
 def test_ecos_parse_float_robust():
-    from fingraph.ingestion.ecos_client import _parse_float
+    from autonexusgraph.ingestion.ecos_client import _parse_float
 
     assert _parse_float("1234.5") == 1234.5
     assert _parse_float("1,234.5") == 1234.5
@@ -90,7 +90,7 @@ def test_krx_top_n_by_market_cap():
     """FDR 응답을 mock 해서 시가총액 정렬 + Listing 변환 검증."""
     import pandas as pd
 
-    from fingraph.ingestion.krx_client import KrxClient
+    from autonexusgraph.ingestion.krx_client import KrxClient
 
     fake_df = pd.DataFrame({
         "Code":   ["005930", "000660", "035420"],
@@ -109,7 +109,7 @@ def test_krx_top_n_by_market_cap():
 
 
 def test_krx_unknown_market():
-    from fingraph.ingestion.krx_client import KrxClient
+    from autonexusgraph.ingestion.krx_client import KrxClient
 
     with patch("FinanceDataReader.StockListing"):
         client = KrxClient()

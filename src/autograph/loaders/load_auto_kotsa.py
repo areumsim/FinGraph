@@ -28,7 +28,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fingraph.db.postgres import get_connection
+from autonexusgraph.db.postgres import get_connection
 from ..config import get_auto_settings
 
 

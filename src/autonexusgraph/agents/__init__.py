@@ -8,7 +8,7 @@
 5. Validator: 환각 / 언어 / 길이 / 수치 안전성 검증 → failed 면 (n_replans<2) replan
 
 진입점:
-    from fingraph.agents import run_agent
+    from autonexusgraph.agents import run_agent
     state = run_agent("삼성전자 2024년 매출은?")
     print(state["answer"], state["citations"])
 """

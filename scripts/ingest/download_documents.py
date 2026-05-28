@@ -32,8 +32,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.config import get_settings  # noqa: E402
-from fingraph.ingestion.dart_client import DartClient  # noqa: E402
+from autonexusgraph.config import get_settings  # noqa: E402
+from autonexusgraph.ingestion.dart_client import DartClient  # noqa: E402
 
 
 def _doc_dir(root: Path, corp_code: str) -> Path:

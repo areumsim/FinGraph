@@ -62,9 +62,9 @@ def llm_judge(
     if not enable:
         return None
 
-    from fingraph.llm.base import get_llm_client
-    from fingraph.llm.budget_aware import budget_aware_client
-    from fingraph.llm.cost_tracker import BudgetExceeded
+    from autonexusgraph.llm.base import get_llm_client
+    from autonexusgraph.llm.budget_aware import budget_aware_client
+    from autonexusgraph.llm.cost_tracker import BudgetExceeded
 
     client = budget_aware_client(
         get_llm_client(role=judge_role),

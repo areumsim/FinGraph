@@ -35,9 +35,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_connection
-from fingraph.ingestion._common import normalize_corp_name
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_connection
+from autonexusgraph.ingestion._common import normalize_corp_name
 
 
 log = logging.getLogger(__name__)

@@ -28,7 +28,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from fingraph.config import get_settings  # noqa: E402
+from autonexusgraph.config import get_settings  # noqa: E402
 
 
 def _load_dart_listed(path: Path) -> dict[str, dict]:

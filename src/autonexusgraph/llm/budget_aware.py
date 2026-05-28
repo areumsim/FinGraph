@@ -4,7 +4,7 @@
 거쳐야 한다. 호출자가 record 를 까먹는 실수를 방지하기 위해 LLMClient 자체를 wrapping.
 
 사용:
-    from fingraph.llm.budget_aware import budget_aware_client
+    from autonexusgraph.llm.budget_aware import budget_aware_client
 
     client = budget_aware_client(get_llm_client(role='extractor'),
                                   caller='p3_extract', hard_limit=2.00)

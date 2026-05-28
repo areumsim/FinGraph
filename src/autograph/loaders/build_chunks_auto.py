@@ -24,7 +24,7 @@ import argparse
 import json
 import logging
 
-from fingraph.db.postgres import get_connection
+from autonexusgraph.db.postgres import get_connection
 
 
 log = logging.getLogger(__name__)

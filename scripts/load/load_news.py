@@ -25,8 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_pool
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_pool
 
 
 UPSERT_ARTICLE = """
@@ -102,7 +102,7 @@ def _load_aliases() -> dict[str, set[str]]:
                     out[k].add(corp_code)
         # 회사명 자체도 추가
         cur.execute("SELECT corp_code, corp_name FROM master.companies WHERE is_active=TRUE")
-        from fingraph.ingestion._common import normalize_corp_name
+        from autonexusgraph.ingestion._common import normalize_corp_name
         for corp_code, corp_name in cur.fetchall():
             if corp_name and len(corp_name) >= 3:
                 out[corp_name].add(corp_code)
@@ -206,7 +206,7 @@ def main() -> int:
             cur.executemany(UPSERT_MENTION, mention_rows[i:i + BATCH])
 
     if not args.no_neo4j and neo4j_rows:
-        from fingraph.db.neo4j import get_driver
+        from autonexusgraph.db.neo4j import get_driver
         with get_driver().session() as session:
             for i in range(0, len(neo4j_rows), 100):
                 session.run(NEO4J_UPSERT_NEWS, rows=neo4j_rows[i:i + 100])

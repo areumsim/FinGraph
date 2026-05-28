@@ -34,7 +34,7 @@ class KrxClient:
     """
 
     def __init__(self, **_kwargs: Any) -> None:
-        # 의존성 지연 import — 패키지 미설치 시 fingraph import 는 가능하게
+        # 의존성 지연 import — 패키지 미설치 시 autonexusgraph import 는 가능하게
         import FinanceDataReader as fdr  # noqa: N813
         self._fdr = fdr
 

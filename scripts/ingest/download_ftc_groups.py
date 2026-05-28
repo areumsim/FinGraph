@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.ingestion._common import save_raw
-from fingraph.ingestion.ftc_client import FtcClient
+from autonexusgraph.config import get_settings
+from autonexusgraph.ingestion._common import save_raw
+from autonexusgraph.ingestion.ftc_client import FtcClient
 
 
 MANUAL_GUIDE = """

@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.db.postgres import get_pool
+from autonexusgraph.db.postgres import get_pool
 
 
 INSERT_CHECK = """
@@ -106,7 +106,7 @@ def main() -> int:
         {"dart_count": len(dart_ceos), "wd_count": len(wd_p169), "both": len(overlap)})
 
     # ── 3) Neo4j 적재량 sanity check ──────────────────────────
-    from fingraph.db.neo4j import get_driver
+    from autonexusgraph.db.neo4j import get_driver
     with get_driver().session() as session:
         cnt = {}
         for q, key in [

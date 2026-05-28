@@ -1,20 +1,20 @@
-# FinGraph + AutoGraph
+# AutoNexusGraph + AutoGraph
 
-> **한국 상장사 공시·재무 데이터 (FinGraph)** 와 **자동차 제품·부품·리콜·공급망 데이터 (AutoGraph)** 를 그래프로 추론해 답하는 멀티도메인 GraphRAG 에이전트. 두 도메인은 같은 LangGraph 코어·LLM 어댑터·safety guard·평가 harness 를 공유하고, `bridge.corp_entity` 로 Cross-Domain 추론까지 수행합니다.
+> **한국 상장사 공시·재무 데이터 (AutoNexusGraph)** 와 **자동차 제품·부품·리콜·공급망 데이터 (AutoGraph)** 를 그래프로 추론해 답하는 멀티도메인 GraphRAG 에이전트. 두 도메인은 같은 LangGraph 코어·LLM 어댑터·safety guard·평가 harness 를 공유하고, `bridge.corp_entity` 로 Cross-Domain 추론까지 수행합니다.
 
 Vector 단독 RAG 가 풀지 못하는 멀티홉 추론을 Graph + 정형 SQL + Vector 하이브리드로 해결. Azure 종속 제거, LLM Provider(OpenAI / Anthropic / 로컬) 환경변수 교체 가능. 도메인 모드는 사용자 hint 또는 키워드 자동 라우팅 — `finance` / `auto` / `cross_domain`.
 
 상세 요구사항은 [PRD.md](./PRD.md) (AutoGraph v2.1 통합본) · AutoGraph 전용 가이드는 [docs/autograph.md](./docs/autograph.md) 참조.
 
 > **현재 단계:**
-> - **FinGraph** — Phase 4.7 완료. Multi-Agent + Send 병렬 + Validator/Replan + HITL(clarification + cost approval) + Cypher 템플릿 레지스트리 + Pre-synth number guard + PG checkpoint + streaming + tracing.
+> - **AutoNexusGraph** — Phase 4.7 완료. Multi-Agent + Send 병렬 + Validator/Replan + HITL(clarification + cost approval) + Cypher 템플릿 레지스트리 + Pre-synth number guard + PG checkpoint + streaming + tracing.
 > - **AutoGraph** — MVP 1차 완료. NHTSA(vPIC/Recalls/Complaints) + Wikidata(manufacturers/models) 적재, vec.chunks 15K embedded, 도메인 라우팅·tools·eval seed·tests 모두 가동. 미구현 4 영역(spec_measurements·components 적재 / Wikidata suppliers / car.go.kr·KATRI·KNCAP / NCAP·IIHS) 은 [docs/autograph.md §5](./docs/autograph.md#5-알려진-제약--todo) 명시.
 
 ---
 
 ## 1. 한눈에 보는 현황
 
-### FinGraph (금융)
+### AutoNexusGraph (금융)
 
 | 영역 | 적재량 | 비고 |
 |---|---:|---|
@@ -47,7 +47,7 @@ Vector 단독 RAG 가 풀지 못하는 멀티홉 추론을 Graph + 정형 SQL + 
 
 ## 2. 핵심 특징
 
-- **멀티도메인** — `finance` (FinGraph) + `auto` (AutoGraph) + `cross_domain` (둘 조합). 도메인은 hint 또는 키워드 자동 라우팅 (`src/autograph/policy.py::route_domain`)
+- **멀티도메인** — `finance` (AutoNexusGraph) + `auto` (AutoGraph) + `cross_domain` (둘 조합). 도메인은 hint 또는 키워드 자동 라우팅 (`src/autograph/policy.py::route_domain`)
 - **금융 도메인** — DART 공시 / KRX 마스터 / ECOS / Wikidata / Wikipedia / SEC EDGAR / GLEIF / 연합뉴스 RSS / KCGS ESG → 코스피200+코스닥100 대상
 - **자동차 도메인** — NHTSA vPIC/Recalls/Complaints / Wikidata (manufacturers/models/suppliers) / (옵션) car.go.kr / KATRI / KNCAP / 한국교통안전공단 수리검사. BOM Level 0~4 (Manufacturer → Variant → System → Module)
 - **3-Store 하이브리드** — Neo4j(관계) + PostgreSQL(수치·메타·벡터) + (옵션) Qdrant — 청크 100만 이하는 pgvector 통합 운영
@@ -105,7 +105,7 @@ Vector 단독 RAG 가 풀지 못하는 멀티홉 추론을 Graph + 정형 SQL + 
 
 ## 4. 데이터 소스
 
-모든 데이터는 공개·합법 출처만 사용 (무단 크롤링·약관 위반 금지). 라이선스별 본문 저장 정책은 `src/fingraph/ingestion/_license.py` 가 코드 레벨에서 강제.
+모든 데이터는 공개·합법 출처만 사용 (무단 크롤링·약관 위반 금지). 라이선스별 본문 저장 정책은 `src/autonexusgraph/ingestion/_license.py` 가 코드 레벨에서 강제.
 
 | 데이터 | 출처 | 라이선스 | 적재 위치 |
 |---|---|---|---|
@@ -348,7 +348,7 @@ make eval-full            # 100문항 4 어댑터 매트릭스
 ### 도구 사용 예시
 
 ```python
-from fingraph.tools import (
+from autonexusgraph.tools import (
     lookup_company, list_subsidiaries, get_executives,
     get_companies_of_person, find_paths, search_documents,
 )
@@ -384,10 +384,10 @@ search_documents(
 
 ### Quickstart — AutoGraph (자동차 도메인)
 
-FinGraph 와 동일 인프라 (PG / Neo4j / pgvector / BGE-M3) 위에 자동차 도메인만 추가.
+AutoNexusGraph 와 동일 인프라 (PG / Neo4j / pgvector / BGE-M3) 위에 자동차 도메인만 추가.
 
 ```bash
-# 0. 인프라는 FinGraph quickstart 와 공유 — 동일 docker 컨테이너에 스키마만 추가
+# 0. 인프라는 AutoNexusGraph quickstart 와 공유 — 동일 docker 컨테이너에 스키마만 추가
 psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/07_autograph.sql
 psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/08_bridge.sql
 psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/09_vec_chunks_auto_meta.sql
@@ -403,7 +403,7 @@ make load-auto-all
 make embed-chunks
 
 # 4. 에이전트 호출 (도메인 명시 또는 자동 판정)
-python -c "from fingraph.agents import run_agent;
+python -c "from autonexusgraph.agents import run_agent;
 s = run_agent('Hyundai Sonata 2024 리콜 사례', domain='auto');
 print(s['answer'])"
 

@@ -23,12 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from fingraph.config import get_settings
-from fingraph.db.postgres import get_pool
-from fingraph.ingestion._common import (
+from autonexusgraph.config import get_settings
+from autonexusgraph.db.postgres import get_pool
+from autonexusgraph.ingestion._common import (
     CheckpointStore, fetch_with_retry, get_rate_limiter, save_raw,
 )
-from fingraph.ingestion.sec_client import SecEdgarClient
+from autonexusgraph.ingestion.sec_client import SecEdgarClient
 
 
 SELECT_CIK = """
