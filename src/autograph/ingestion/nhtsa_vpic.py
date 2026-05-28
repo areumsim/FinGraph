@@ -29,10 +29,10 @@ import httpx
 from fingraph.ingestion._common import (
     CheckpointStore,
     RateLimiter,
-    fetch_with_retry,
     save_raw,
 )
 from ..config import get_auto_settings
+from ._common_nhtsa import nhtsa_http_get
 
 
 log = logging.getLogger(__name__)
@@ -43,17 +43,7 @@ _SOURCE = "auto/nhtsa_vpic"
 
 
 def _http_get(url: str, params: dict | None = None) -> dict:
-    settings = get_auto_settings()
-    headers = {"User-Agent": settings.wikidata_user_agent}
-
-    def _do() -> dict:
-        with httpx.Client(timeout=30.0, headers=headers) as client:
-            r = client.get(url, params=params)
-            r.raise_for_status()
-            return r.json()
-
-    _LIMITER.acquire()
-    return fetch_with_retry(_do, max_tries=5)
+    return nhtsa_http_get(url, params, _LIMITER)
 
 
 # ─── all makes ─────────────────────────────────────────────────
