@@ -40,14 +40,94 @@
         │
         ▼
 [사전 정의 도구 풀 — 자유 SQL/Cypher 금지 (PRD §7.5.9/10)]
-  tools/financials.py      — PG: lookup_company, get_revenue, …
-  tools/graph.py           — Neo4j: list_subsidiaries, find_paths, …
-  tools/retrieve.py        — pgvector + meta filter: search_documents
+  tools/financials.py            — finance PG: lookup_company, get_revenue, …
+  tools/graph.py                 — finance Neo4j: list_subsidiaries, find_paths, …
+  tools/retrieve.py              — pgvector + meta filter: search_documents
+  autograph/tools/spec.py        — auto PG: lookup_vehicle, get_spec, compare_vehicles, …
+  autograph/tools/graph.py       — auto Neo4j: list_recalls_affecting, list_components, …
+  autograph/tools/retrieve.py    — pgvector + mfr/model/variant meta: search_documents_auto
+  autograph/tools/bridge.py      — cross-domain: bridge_corp_to_entity, …
         │
         ▼
 [저장소]
   Neo4j 5.18 + PostgreSQL 16 (pgvector) + (옵션) Qdrant
 ```
+
+## 1.5. 도메인 라우팅 (`finance` / `auto` / `cross_domain`)
+
+PRD v2.1 부터 단일 에이전트가 **금융 (FinGraph) + 자동차 (AutoGraph) + 둘의 교차** 를 모두 처리.
+도메인 분기는 4 지점에 명시적 — LLM 자유 판단 영역 없음.
+
+```
+[1] _init_state (agents/graph.py:370)
+    ├─ run_agent(question, domain=None|"finance"|"auto"|"cross_domain")
+    ├─ domain 미지정 → autograph.policy.route_domain(question) 호출
+    │     · KW_FIN ∩ KW_AUTO 동시 등장   → "cross_domain"
+    │     · KW_AUTO_GENERIC|RECALL|SPEC  → "auto"
+    │     · 그 외                         → "finance" (기본)
+    └─ state["domain"] 에 기록 — 이후 모든 노드가 참조
+        │
+        ▼
+[2] planner_node (agents/nodes.py)
+    ├─ state["domain"] == "auto"
+    │     → autograph.policy.plan_auto_tasks(question, target_vehicles, target_models)
+    │     · classify_question_auto() → vehicle_spec / recall / complaint / supply_chain /
+    │       compare / narrative
+    │     · question kind 별로 SQL / graph / research task DAG 생성
+    │     · 모든 task 에 lookup_vehicle 1건 선행 (식별)
+    ├─ state["domain"] == "cross_domain"
+    │     → autograph.policy.plan_cross_domain_tasks(question, target_companies)
+    │     · auto research/graph + bridge_corp_to_entity + finance SQL 혼합 DAG
+    └─ state["domain"] == "finance" (기본)
+          → fingraph.agents.policy.plan_tasks() — 기존 finance planner
+        │
+        ▼
+[3] workers._allowed_intents (agents/workers.py)
+    ├─ agent 별 (sql / graph / research / calculator) 화이트리스트:
+    │     · _FIN_GRAPH_ALLOWED = {list_subsidiaries, get_executives, ...}
+    │     · _AUTO_GRAPH_ALLOWED = {list_recalls_affecting, list_components, ...}
+    │     · _FIN_SQL_ALLOWED   = {get_revenue, get_operating_income, ...}
+    │     · _AUTO_SQL_ALLOWED  = {lookup_vehicle, get_spec, compare_vehicles, ...}
+    └─ domain 별 조합:
+          finance      → _FIN_*
+          auto         → _AUTO_*
+          cross_domain → _FIN_* ∪ _AUTO_*
+        │
+        ▼
+[4] workers._toolbox_for (agents/workers.py)
+    └─ intent 호출 시 import 대상 결정:
+          intent ∈ _AUTO_*  → from autograph.tools import {intent}
+          intent ∈ _FIN_*   → from fingraph.tools  import {intent}
+```
+
+**Cypher 템플릿 통합**: `autograph.cypher_templates_auto.AUTO_TEMPLATES`
+(`auto_*` 접두사 22개) 는 `autograph.tools` import 시 **1회 side-effect** 로
+`fingraph.tools.cypher_templates.TEMPLATES` 에 병합. 따라서 worker 는
+`render_template("auto_recalls_by_variant", ...)` 와 `render_template("list_subsidiaries", ...)`
+를 동일 함수로 호출 — 같은 cypher_guard / param schema 검증 통과.
+
+**회귀 안전성**: domain 미지정 finance gold (기존 `eval/qa_gold/gold_qa_v0.jsonl`) 는
+`route_domain` 이 키워드 부재로 `"finance"` 반환 → 기존 finance planner 동일 경로.
+`tests/test_autograph_routing.py::test_planner_node_finance_unaffected_when_no_domain` 가 보장.
+
+**API / UI 노출**: `POST /chat` 의 `ChatRequest.domain` (optional), Streamlit
+사이드바 라디오 (auto-detect / finance / auto / cross_domain). 미지정 = 자동 판정.
+
+### 빠른 진단
+
+```python
+from autograph.policy import route_domain, classify_question_auto
+from fingraph.agents.graph import _init_state
+
+route_domain("Hyundai Sonata 2024 리콜")           # → 'auto'
+route_domain("현대자동차 2024 매출과 그랜저 리콜")  # → 'cross_domain'
+route_domain("삼성전자 2024년 매출")                # → 'finance'
+classify_question_auto("Tesla Model Y 2023 리콜")   # → 'vehicle_recall'
+
+s = _init_state("Tesla recall", "tid", None)
+s["domain"]   # → 'auto'
+```
+
 
 ## 2. 한 turn 의 실행 흐름 (PRD §7.5.2 / §7.5.3 / §7.5.7)
 

@@ -61,6 +61,150 @@ NHTSA / Wikidata raw
     └ synthesizer  → number_guard 통과 후 LLM 합성
 ```
 
+## 2.5. 시스템 아키텍처 다이어그램
+
+### 2.5.1 컨테이너 토폴로지 — FinGraph 인프라 공유
+
+```mermaid
+flowchart TB
+    subgraph DATA["데이터 계층 (FinGraph 와 공유)"]
+        PG[("PostgreSQL 16<br/>pgvector<br/>master · fin · auto · bridge · vec.chunks")]
+        NEO[("Neo4j 5.18<br/>finance + auto 그래프")]
+    end
+
+    subgraph MODEL["모델 계층 (공유 GPU)"]
+        BGE["BGE-M3<br/>임베딩 1024d"]
+        RR["BGE-Reranker<br/>(옵션)"]
+    end
+
+    subgraph APP["애플리케이션"]
+        ING_FIN["ingestion (finance)<br/>DART · KRX · ECOS · Wikidata"]
+        ING_AUTO["ingestion (auto)<br/>NHTSA vPIC/Recalls/Complaints · Wikidata · data.go.kr · TIC"]
+        API["FastAPI /chat<br/>+ ChatRequest.domain"]
+        UI["Streamlit<br/>도메인 모드 라디오"]
+        AGENT["LangGraph Multi-Agent<br/>Triage → Planner → Workers → Validator → Synthesizer"]
+    end
+
+    subgraph LLM["LLM Provider (어댑터)"]
+        OPENAI["OpenAI"]
+        ANTHROPIC["Anthropic"]
+        LOCAL["로컬"]
+    end
+
+    ING_FIN --> PG
+    ING_FIN --> NEO
+    ING_AUTO --> PG
+    ING_AUTO --> NEO
+    PG -. embed backfill .-> BGE
+    AGENT --> PG
+    AGENT --> NEO
+    AGENT --> BGE
+    AGENT --> LLM
+    API --> AGENT
+    UI --> API
+```
+
+### 2.5.2 데이터 흐름 (멱등 파이프라인)
+
+```mermaid
+flowchart LR
+    subgraph RAW["raw (보존)"]
+        NHTSA["NHTSA<br/>vPIC · Recalls · Complaints"]
+        WD["Wikidata SPARQL<br/>manufacturers · models · suppliers"]
+        DATAGOKR["data.go.kr<br/>리콜 API · 수리검사 CSV"]
+        TIC["bigdata-tic.kr<br/>(OAuth)"]
+    end
+
+    subgraph PGT["PostgreSQL"]
+        MFR["auto.master_manufacturers"]
+        MDL["auto.master_vehicle_models"]
+        VAR["auto.master_vehicle_variants"]
+        REC["auto.events_recalls"]
+        CPL["auto.events_complaints"]
+        BR["bridge.corp_entity"]
+        CHK["vec.chunks<br/>(mfr/model/variant 메타)"]
+    end
+
+    subgraph NEOT["Neo4j"]
+        N_MFR(("Manufacturer"))
+        N_MDL(("VehicleModel"))
+        N_VAR(("VehicleVariant"))
+        N_REC(("Recall"))
+    end
+
+    NHTSA -->|"load_auto_pg<br/>SAVEPOINT idempotent"| MFR & MDL & VAR & REC & CPL
+    WD --> MFR & MDL
+    DATAGOKR -. 후속 .-> REC
+    TIC -. 후속 .-> CHK
+
+    MFR -->|load_auto_neo4j| N_MFR
+    MDL -->|load_auto_neo4j| N_MDL
+    VAR -->|load_auto_neo4j| N_VAR
+    REC -->|load_auto_neo4j| N_REC
+    N_MFR -.MANUFACTURES.-> N_MDL
+    N_MDL -.HAS_VARIANT.-> N_VAR
+    N_REC -.AFFECTED_BY.-> N_VAR
+
+    MFR -->|"load_bridge<br/>QID > LEI > biz_no > name"| BR
+    REC -->|build_chunks_auto| CHK
+    CPL -->|build_chunks_auto| CHK
+    CHK -. "make embed-chunks<br/>BGE-M3 backfill" .-> CHK
+```
+
+### 2.5.3 도메인 라우팅 (한 turn 의 흐름)
+
+```mermaid
+flowchart TD
+    Q["User Query<br/>+ optional domain hint"]
+    Q --> INIT["_init_state<br/>(agents/graph.py)"]
+    INIT --> ROUTE{"route_domain"}
+    ROUTE -->|KW_FIN & KW_AUTO 동시| CROSS["domain=cross_domain"]
+    ROUTE -->|KW_AUTO_*| AUTO["domain=auto"]
+    ROUTE -->|"기본 / KW_FIN"| FIN["domain=finance"]
+
+    AUTO --> P_AUTO["planner_node →<br/>autograph.policy.plan_auto_tasks<br/>(classify_question_auto: spec/recall/complaint/<br/>supply_chain/compare/narrative)"]
+    CROSS --> P_CROSS["planner_node →<br/>plan_cross_domain_tasks<br/>(auto research/graph + bridge_corp_to_entity + finance SQL)"]
+    FIN --> P_FIN["planner_node →<br/>fingraph.agents.policy.plan_tasks<br/>(기존 finance planner — 무수정)"]
+
+    P_AUTO & P_CROSS & P_FIN --> SUP["Supervisor<br/>(Send API 병렬 디스패치)"]
+    SUP --> WORKERS
+
+    subgraph WORKERS["Workers — _allowed_intents 화이트리스트"]
+        WSQL["sql_worker<br/>_FIN_SQL_ ∪ _AUTO_SQL_"]
+        WGRAPH["graph_worker<br/>_FIN_GRAPH_ ∪ _AUTO_GRAPH_<br/>(Cypher 템플릿 강제)"]
+        WRES["research_worker<br/>search_documents / search_documents_auto"]
+        WCALC["calculator_worker"]
+    end
+
+    WORKERS --> TOOLS["_toolbox_for(state)<br/>intent → autograph.tools.* OR fingraph.tools.*"]
+    TOOLS --> VAL["Validator<br/>(replan ≤2)"]
+    VAL --> SYN["Synthesizer<br/>+ number_guard (PG 결과만 인용)"]
+    SYN --> ANS["Answer + citations"]
+```
+
+### 2.5.4 BOM 계층 (PRD §4.4)
+
+```mermaid
+flowchart TD
+    L0["Level 0: Manufacturer<br/>현대 · 토요타 · 테슬라"]
+    L1["Level 1: VehicleModel<br/>Sonata · Model Y"]
+    L2["Level 2: VehicleVariant<br/>2024 Sonata Trim X"]
+    L3["Level 3: System<br/>파워트레인 · 브레이크 · 안전"]
+    L4["Level 4: Module<br/>배터리팩 · ECU · 에어백"]
+    L5["Level 5: Part (post-MVP)<br/>셀 · 센서 · 인플레이터"]
+    L6["Level 6: Material/Process (post-MVP)<br/>NCM · 알루미늄 · 단조"]
+
+    L0 -->|MANUFACTURES| L1
+    L1 -->|HAS_VARIANT| L2
+    L2 -->|CONTAINS_SYSTEM| L3
+    L3 -->|CONTAINS_MODULE| L4
+    L4 -.CONTAINS_PART.-> L5
+    L5 -.MADE_OF / USES_PROCESS.-> L6
+
+    style L5 stroke-dasharray: 5 5
+    style L6 stroke-dasharray: 5 5
+```
+
 ## 3. PRD 핵심 원칙 적용
 
 | 원칙 | 어디서 강제하는지 |

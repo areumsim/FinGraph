@@ -37,6 +37,16 @@ class AutoSettings(BaseSettings):
     katri_api_key: str = ""
     kncap_api_key: str = ""
 
+    # === 시험인증 빅데이터 플랫폼 (KATRI 운영) — OAuth client credentials ===
+    bigdata_tic_base_url: str = "https://oauth.bigdata-tic.kr"
+    bigdata_tic_client_id: str = ""
+    bigdata_tic_client_secret: str = ""
+
+    # === 한국교통안전공단 수리검사내역 (data.go.kr 15155857 파일 다운) ===
+    datagokr_kotsa_inspection_dir: Path = Field(
+        default=PROJECT_ROOT / "data" / "raw" / "datagokr",
+    )
+
     # === 데이터 루트 (finance 와 공유 가능, 자동차는 subdir 'auto/') ===
     auto_raw_dir: Path = Field(default=PROJECT_ROOT / "data" / "raw" / "auto")
 
