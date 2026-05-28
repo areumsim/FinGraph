@@ -1,16 +1,20 @@
-# FinGraph
+# FinGraph + AutoGraph
 
-> **한국 상장사 공시·재무 데이터를 기반으로, 기업 간 복잡한 관계를 그래프로 추론하여 답변하는 금융 분석 GraphRAG 에이전트**
+> **한국 상장사 공시·재무 데이터 (FinGraph)** 와 **자동차 제품·부품·리콜·공급망 데이터 (AutoGraph)** 를 그래프로 추론해 답하는 멀티도메인 GraphRAG 에이전트. 두 도메인은 같은 LangGraph 코어·LLM 어댑터·safety guard·평가 harness 를 공유하고, `bridge.corp_entity` 로 Cross-Domain 추론까지 수행합니다.
 
-Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 겸직, 그룹·산업 연계)을 Graph + 정형 SQL + Vector 의 하이브리드로 풀어내는 시스템. Azure 종속을 제거하고 LLM Provider(OpenAI / Anthropic / 로컬)를 환경변수로 교체 가능하게 설계.
+Vector 단독 RAG 가 풀지 못하는 멀티홉 추론을 Graph + 정형 SQL + Vector 하이브리드로 해결. Azure 종속 제거, LLM Provider(OpenAI / Anthropic / 로컬) 환경변수 교체 가능. 도메인 모드는 사용자 hint 또는 키워드 자동 라우팅 — `finance` / `auto` / `cross_domain`.
 
-상세 요구사항은 [PRD.md](./PRD.md) 참조.
+상세 요구사항은 [PRD.md](./PRD.md) (AutoGraph v2.1 통합본) · AutoGraph 전용 가이드는 [docs/autograph.md](./docs/autograph.md) 참조.
 
-> **현재 단계:** Phase 4.7 완료. Multi-Agent + Send 병렬 + Validator/Replan + HITL(clarification + cost approval) + Cypher 템플릿 레지스트리 + Pre-synth number guard + PG checkpoint + streaming + tracing. 다음 권장: Calculator Python sandbox / `/health` 보강.
+> **현재 단계:**
+> - **FinGraph** — Phase 4.7 완료. Multi-Agent + Send 병렬 + Validator/Replan + HITL(clarification + cost approval) + Cypher 템플릿 레지스트리 + Pre-synth number guard + PG checkpoint + streaming + tracing.
+> - **AutoGraph** — MVP 1차 완료. NHTSA(vPIC/Recalls/Complaints) + Wikidata(manufacturers/models) 적재, vec.chunks 15K embedded, 도메인 라우팅·tools·eval seed·tests 모두 가동. 미구현 4 영역(spec_measurements·components 적재 / Wikidata suppliers / car.go.kr·KATRI·KNCAP / NCAP·IIHS) 은 [docs/autograph.md §5](./docs/autograph.md#5-알려진-제약--todo) 명시.
 
 ---
 
 ## 1. 한눈에 보는 현황
+
+### FinGraph (금융)
 
 | 영역 | 적재량 | 비고 |
 |---|---:|---|
@@ -25,11 +29,27 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 | Neo4j Company / Person / NewsEvent | 12,914 / 14,536 / 85 | 동명이인 2,171 분리 |
 | Neo4j SUBSIDIARY_OF / EXECUTIVE_OF / MAJOR_SHAREHOLDER_OF | 8,661 / 33,064 / 12,548 | 시점(snapshot) + source 부여 |
 
+### AutoGraph (자동차)
+
+| 영역 | 적재량 | 비고 |
+|---|---:|---|
+| `auto.master_manufacturers` | 22,143 | NHTSA vPIC 12K + Wikidata mfr 10K (QID 10,027 매핑) |
+| `auto.master_vehicle_models` | 6,729 | vPIC + Wikidata 모델 |
+| `auto.master_vehicle_variants` | 237 | HYUNDAI/KIA/GENESIS/TESLA × 2020–2024 |
+| `auto.events_recalls` (NHTSA) | 219 | 모두 manufacturer_id / 92% model·variant 매핑 |
+| `auto.events_complaints` (NHTSA) | 16,005 | 100% mfr / 97% model·variant 매핑 |
+| `auto.spec_measurements` / `auto.components` | 0 / 0 | post-MVP — 공개 BOM·spec 단위 매핑 후속 |
+| `vec.chunks` (nhtsa_recall + nhtsa_complaint) | 15,232 / **모두 embedded** | manufacturer/model/variant 메타 필터 가능 |
+| `bridge.corp_entity` | 3 | QID 자동 매칭 1 (기아) + name 후보 2 (suppliers Wikidata outage 로 후속) |
+| Neo4j Manufacturer / VehicleModel / Variant / Recall | 22,143 / 6,729 / 237 / 219 | `AFFECTED_BY` 208 |
+
 ---
 
 ## 2. 핵심 특징
 
-- **금융 특화 도메인** — DART 공시 / KRX 마스터 / ECOS / Wikidata / Wikipedia / SEC EDGAR / GLEIF / 연합뉴스 RSS / KCGS ESG → 코스피200+코스닥100 대상
+- **멀티도메인** — `finance` (FinGraph) + `auto` (AutoGraph) + `cross_domain` (둘 조합). 도메인은 hint 또는 키워드 자동 라우팅 (`src/autograph/policy.py::route_domain`)
+- **금융 도메인** — DART 공시 / KRX 마스터 / ECOS / Wikidata / Wikipedia / SEC EDGAR / GLEIF / 연합뉴스 RSS / KCGS ESG → 코스피200+코스닥100 대상
+- **자동차 도메인** — NHTSA vPIC/Recalls/Complaints / Wikidata (manufacturers/models/suppliers) / (옵션) car.go.kr / KATRI / KNCAP / 한국교통안전공단 수리검사. BOM Level 0~4 (Manufacturer → Variant → System → Module)
 - **3-Store 하이브리드** — Neo4j(관계) + PostgreSQL(수치·메타·벡터) + (옵션) Qdrant — 청크 100만 이하는 pgvector 통합 운영
 - **Multi-Agent + Planning (LangGraph)** — Triage / Planner / Supervisor / Workers / Validator / Synthesizer 역할 분리 [PRD §7.5](./PRD.md#75-multi-agent--planning-상세-설계-langgraph)
 - **채팅형 UI + 대화 히스토리** — thread 기반 multi-turn [PRD §7.6](./PRD.md#76-web-ui-채팅형--대화-히스토리-multi-turn)
@@ -108,6 +128,22 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 **수집 범위 (1차):** 코스피 200 + 코스닥 100 약 300개사, 최근 3개 회계연도.
 **범위 외 (Out-of-Scope):** 빅카인즈 본문, 나무위키(CC BY-NC-SA), 종목토론방, LinkedIn, Twitter.
 
+### AutoGraph 데이터 소스
+
+| 데이터 | 출처 | 라이선스 | 인증 | 적재 위치 |
+|---|---|---|---|---|
+| 차량 마스터·제원 (전 세계 vPIC) | NHTSA vPIC API | 공공 (US Gov) | 불필요 | `auto.master_*` |
+| 리콜 캠페인 | NHTSA Recalls API | 공공 | 불필요 | `auto.events_recalls` + Neo4j Recall |
+| 결함 신고 | NHTSA Complaints API | 공공 | 불필요 | `auto.events_complaints` + `vec.chunks` |
+| 제조사·모델·공급사 QID·LEI·사업자번호 | Wikidata SPARQL | CC0 | 불필요 (rate limit) | `auto.master_*` + `bridge.corp_entity` |
+| 자동차 리콜정보 (한국) | data.go.kr [15089863](https://www.data.go.kr/data/15089863/openapi.do) | 공공 | `DATA_GO_KR_API_KEY` | (키 확보 후) `auto.events_recalls` |
+| 자동차검사관리 수리검사내역 (사고·침수·도난 차량 검사) | data.go.kr [15155857](https://www.data.go.kr/data/15155857/fileData.do) (파일 다운) | 공공 | 불필요 (파일) | `data/raw/datagokr/` → (적재 후) `auto.events_inspections` |
+| 시험인증 (KATRI / 부품 인증) | bigdata-tic.kr Open API | 공공 (회원) | OAuth `BIGDATA_TIC_CLIENT_ID/SECRET` | (키 확보 후) `auto.cert_*` |
+| KNCAP 안전등급 | car.go.kr (수동 / 별도 API) | 공공 | (지정 채널) | `auto.spec_measurements` (safety.*) |
+| Euro NCAP / IIHS (옵션) | euroncap.com / iihs.org | 공공 (사용 약관) | 불필요 | (후속) `auto.spec_measurements` |
+
+> 인증 키 부재 시 ingestion 은 graceful skip — 코드 변경 없이 `.env` 만 채우면 활성화.
+
 ---
 
 ## 5. 에이전트 도구 (사전 정의 함수 풀)
@@ -138,6 +174,15 @@ Vector 단독 RAG가 풀지 못하는 멀티홉 추론(자회사 구조, 임원 
 - `get_chunk(chunk_id)` — 단일 청크 + 메타
 
 답변은 항상 **출처(chunk_id / corp_code / rcept_no / 노드ID) + 회계연도** 명시. 불확실하면 "정보 부족" 응답.
+
+### AutoGraph tools (`src/autograph/tools/*`)
+
+도메인 `auto` / `cross_domain` 모드에서만 활성. workers 화이트리스트로 강제.
+
+- **`spec.py`** — `lookup_vehicle` / `get_vehicle_info` / `get_spec` / `compare_vehicles` / `get_safety_rating` (PG SQL)
+- **`graph.py`** — `lookup_vehicle_graph` / `lookup_supplier` / `list_components` / `list_recalls_affecting` / `get_suppliers_of_component` / `get_vehicles_using_component` / `find_vehicle_component_paths` (Cypher 템플릿 `auto_*` 경유)
+- **`retrieve.py`** — `search_documents_auto` / `search_by_metadata_auto` / `get_chunk_auto` (pgvector + manufacturer_id/model_id/variant_id 필터)
+- **`bridge.py`** — `bridge_corp_to_entity` / `bridge_entity_to_corp` / `cross_query` (corp_code ↔ entity_id, `reviewed_status='rejected'` 제외)
 
 ---
 
@@ -210,10 +255,11 @@ Vector only / Graph only / **Hybrid Agent** / SQL+Vector — 4종 × LLM 3종 = 
 
 ## 10. 문서
 
-- [PRD.md](./PRD.md) — 전체 요구사항·아키텍처 정의
+- [PRD.md](./PRD.md) — 전체 요구사항·아키텍처 정의 (AutoGraph v2.1 통합)
+- [docs/autograph.md](./docs/autograph.md) — **AutoGraph 도메인 전용** 가이드 (구조 / 데이터 흐름 / 실행 순서 / 알려진 제약)
 - [docs/operations/docker_setup.md](./docs/operations/docker_setup.md) — Docker 스택 가이드
 - [docs/operations/data_pipeline.md](./docs/operations/data_pipeline.md) — 3-tier 멱등 파이프라인 + Step DAG + 4-pass 추출 + LangGraph 활성화
-- [docs/operations/agents.md](./docs/operations/agents.md) — 에이전트 아키텍처 (LangGraph StateGraph, AgentState, replan/checkpoint/tracing/streaming, 세션 메모리, safety 가드)
+- [docs/operations/agents.md](./docs/operations/agents.md) — 에이전트 아키텍처 (도메인 라우팅 / LangGraph / replan / checkpoint / tracing / safety 가드)
 - [docs/operations/rag_tools.md](./docs/operations/rag_tools.md) — 도구 카탈로그 + 시나리오
 - [docs/operations/kcgs_esg_guide.md](./docs/operations/kcgs_esg_guide.md) — KCGS ESG 등급 수집 가이드
 - [eval/qa_gold/README.md](./eval/qa_gold/README.md) — 평가 gold set 스키마 + 큐레이션 가이드
@@ -335,6 +381,37 @@ search_documents(
 ```
 
 크롤러는 **이어받기·실패추적·Ctrl+C 안전종료** 지원. 로더는 모두 **idempotent**. raw 만 있으면 `data/processed/` 와 DB 는 언제든 재생성 가능.
+
+### Quickstart — AutoGraph (자동차 도메인)
+
+FinGraph 와 동일 인프라 (PG / Neo4j / pgvector / BGE-M3) 위에 자동차 도메인만 추가.
+
+```bash
+# 0. 인프라는 FinGraph quickstart 와 공유 — 동일 docker 컨테이너에 스키마만 추가
+psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/07_autograph.sql
+psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/08_bridge.sql
+psql -h <host> -p 31011 -U fingraph -d fingraph -f infra/postgres/init/09_vec_chunks_auto_meta.sql
+python -m autograph.loaders.neo4j_init    # CONSTRAINT/INDEX 멱등
+
+# 1. 인제스션 (.env 의 AUTO_INGEST_MAKES / AUTO_INGEST_YEAR_MIN/MAX 기반)
+make ingest-auto-all                # = vpic + recalls + complaints + wikidata
+
+# 2. 로더 — raw → PG → Neo4j → bridge → vec.chunks
+make load-auto-all
+
+# 3. 청크 임베딩 (finance 와 동일 BGE-M3 backfill — generic 작업)
+make embed-chunks
+
+# 4. 에이전트 호출 (도메인 명시 또는 자동 판정)
+python -c "from fingraph.agents import run_agent;
+s = run_agent('Hyundai Sonata 2024 리콜 사례', domain='auto');
+print(s['answer'])"
+
+# 5. 평가
+make eval-auto                       # eval/reports/auto_<timestamp>/summary.md
+```
+
+자세한 절차·미구현 영역·회귀 안전성은 [docs/autograph.md](./docs/autograph.md). 도메인 라우팅 흐름은 [docs/operations/agents.md](./docs/operations/agents.md#도메인-라우팅-finance--auto--cross_domain).
 
 ---
 
