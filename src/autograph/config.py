@@ -47,6 +47,11 @@ class AutoSettings(BaseSettings):
         default=PROJECT_ROOT / "data" / "raw" / "datagokr",
     )
 
+    # === AI Hub (aihub.or.kr) — NIA 한국지능정보사회진흥원 ===
+    # 회원가입 후 마이페이지에서 API key 발급 (UUID, 이메일 수신).
+    # 데이터셋 상세 페이지 → "다운로드" 버튼으로 승인 필수.
+    aihub_api_key: str = ""
+
     # === 데이터 루트 (finance 와 공유 가능, 자동차는 subdir 'auto/') ===
     auto_raw_dir: Path = Field(default=PROJECT_ROOT / "data" / "raw" / "auto")
 
