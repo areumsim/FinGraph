@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
 
-    postgres_dsn: str = "postgresql://fingraph:fingraph_dev@localhost:5432/fingraph"
+    postgres_dsn: str = "postgresql://autonexusgraph:autonexusgraph_dev@localhost:5432/autonexusgraph"
 
     # Qdrant — minimal 스택에선 미사용 (pgvector 통합). 활성화 시 .env 에 값 채움.
     qdrant_url: str = ""

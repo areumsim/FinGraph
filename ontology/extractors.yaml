@@ -22,7 +22,7 @@ extractors:
     target:
       sql_table: fin.financials       # PG 직매핑. Neo4j 미적재.
     idempotency: UNIQUE(corp_code, bsns_year, reprt_code, fs_div, account_id, account_nm)
-    impl: src/fingraph/loaders/financials.py
+    impl: src/autonexusgraph/loaders/financials.py
 
   # ── P2 (정형 — 마스터 + 지배구조) ──────────────────────────
   dart_corp_master:
@@ -39,8 +39,8 @@ extractors:
       neo4j_labels: [Company, Industry, Market, Person]
     idempotency: PK(corp_code) / Cypher MERGE
     impl:
-      sql: src/fingraph/loaders/companies.py
-      graph: src/fingraph/loaders/graph.py
+      sql: src/autonexusgraph/loaders/companies.py
+      graph: src/autonexusgraph/loaders/graph.py
     status: ✅ Phase 3 적재 완료
 
   krx_master:
@@ -56,7 +56,7 @@ extractors:
     target:
       sql_table: master.companies (extra.market_cap_krw 보강)
     idempotency: PK(corp_code) — DART 와 stock_code 매칭
-    impl: src/fingraph/loaders/companies.py
+    impl: src/autonexusgraph/loaders/companies.py
     status: ✅ 시가총액·시장 분류
 
   dart_other_corp_investment:           # ⭐ 자회사 추출
@@ -72,7 +72,7 @@ extractors:
     target:
       neo4j_labels: [Company]
     idempotency: MERGE on (child.corp_code, parent.corp_code, snapshot_date)
-    impl: src/fingraph/loaders/graph_subsidiaries.py    # ⏳ 미구현 (다음 PR)
+    impl: src/autonexusgraph/loaders/graph_subsidiaries.py    # ⏳ 미구현 (다음 PR)
     status: ⏳ TODO Phase 4
 
   dart_executive_status:               # ⭐ 임원진 추출
@@ -88,7 +88,7 @@ extractors:
     target:
       neo4j_labels: [Person, Company]
     idempotency: MERGE on (Person.name+birth_year, Company.corp_code, EXECUTIVE_OF.role)
-    impl: src/fingraph/loaders/graph_executives.py      # ⏳ 미구현
+    impl: src/autonexusgraph/loaders/graph_executives.py      # ⏳ 미구현
     status: ⏳ TODO Phase 4
 
   dart_major_shareholder:              # 최대주주
@@ -100,7 +100,7 @@ extractors:
     out:
       entities: [Person, Company]
       relations: [MAJOR_SHAREHOLDER_OF]
-    impl: src/fingraph/loaders/graph_shareholders.py    # ⏳ 미구현
+    impl: src/autonexusgraph/loaders/graph_shareholders.py    # ⏳ 미구현
     status: ⏳ TODO Phase 4
 
   ftc_large_corp_group:                # 공정위 대규모기업집단 — 후속
@@ -112,7 +112,7 @@ extractors:
     out:
       entities: [Group]
       relations: [BELONGS_TO_GROUP]
-    impl: src/fingraph/loaders/graph_groups.py
+    impl: src/autonexusgraph/loaders/graph_groups.py
     status: ⏳ TODO Phase 5
 
   # ── P3 (LLM — 사업보고서 본문 청크 기반) ──────────────────
@@ -127,7 +127,7 @@ extractors:
       provider: from .env LLM_MODEL_*    # PRD §5.3 매핑
       role: research                       # LLM_MODEL_RESEARCH 사용 (경량)
       strategy: schema_aware
-      prompt: src/fingraph/prompts/relation_extract.yaml   # ⏳ 미구현
+      prompt: src/autonexusgraph/prompts/relation_extract.yaml   # ⏳ 미구현
     out:
       entities: [Product]
       relations: [PARTNER_OF, COMPETES_WITH, INVESTED_IN, PRODUCES]
@@ -138,7 +138,7 @@ extractors:
       auto_accept: ">= 0.70"
       review_queue: "0.50 <= conf < 0.70"
       drop: "< 0.50"
-    impl: src/fingraph/extractors/llm_relations.py        # ⏳ 미구현
+    impl: src/autonexusgraph/extractors/llm_relations.py        # ⏳ 미구현
     status: ⏳ TODO Phase 4
 
   # ── P4 (cross-validate) ─────────────────────────────────────
@@ -150,7 +150,7 @@ extractors:
       - LLM 추출 관계가 정형(P1/P2) 와 일치하면 confidence boost
       - LLM 추출 SUBSIDIARY_OF 인데 P2 에 없으면 reject (정형 우선)
       - PARTNER_OF 처럼 정형 출처 없는 관계는 confidence_gate 만 적용
-    impl: src/fingraph/extractors/validator.py            # ⏳ 미구현
+    impl: src/autonexusgraph/extractors/validator.py            # ⏳ 미구현
     status: ⏳ TODO Phase 4
 
 # ── 현재 상태 요약 ─────────────────────────────────────────────

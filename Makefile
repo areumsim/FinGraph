@@ -99,7 +99,7 @@ up:
 	@echo ""
 	@echo "기동됨. 헬스체크:"
 	@echo "  Neo4j    : http://localhost:7474"
-	@echo "  Postgres : psql -h localhost -U fingraph -d fingraph"
+	@echo "  Postgres : psql -h localhost -U autonexusgraph -d autonexusgraph"
 	@echo "  Qdrant   : http://localhost:6333/dashboard"
 
 down:

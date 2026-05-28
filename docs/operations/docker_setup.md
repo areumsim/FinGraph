@@ -1,5 +1,21 @@
 # Docker 셋업 가이드 (PG + Neo4j minimal)
 
+## DB 자격 정보 한눈에
+
+운영 환경(`.env`) 의 기본값. 컨테이너 처음 기동 시 자동 생성되며, 변경하면 docker volume 초기화 또는 ALTER 필요.
+
+| 항목 | 기본값 | 비고 |
+|---|---|---|
+| PostgreSQL user | `autonexusgraph` | superuser |
+| PostgreSQL password | `autonexusgraph_dev` | dev only. 운영 시 변경 권장 |
+| PostgreSQL dbname | `autonexusgraph` | 모든 schema 보유 |
+| Neo4j user | `neo4j` | Neo4j default (변경 불가) |
+| Neo4j password | `autonexusgraph_dev` | dev only |
+| 호스트 포트 | PG 31011 / Neo4j Bolt 31010 / Neo4j HTTP 31009 | `.env` 의 `POSTGRES_DSN` · `NEO4J_URI` |
+
+`.env` 는 `.gitignore` (`.env` line 2) 로 git 추적에서 제외. 비밀번호는 본 파일 (commit 됨) 의 예시 그대로 사용 가능하지만, **운영 환경에서는 반드시 변경**.
+
+
 AutoNexusGraph 의 **PostgreSQL(pgvector)** + **Neo4j 5.18** 컨테이너 셋업.
 Qdrant/Redis 는 옵션 (compose 에 주석으로 슬롯만 남김).
 
@@ -10,7 +26,8 @@ Qdrant/Redis 는 옵션 (compose 에 주석으로 슬롯만 남김).
 | PostgreSQL | `ar-postgres` | 31011 → 5432 | `${DB_DATA_ROOT}/postgres` → `/var/lib/postgresql/data` (실데이터는 `…/postgres/pgdata/`) |
 | Neo4j | `ar-neo4j` | 31009 → 7474 (HTTP)<br>31010 → 7687 (Bolt) | `${DB_DATA_ROOT}/neo4j/data` → `/data`<br>`${DB_DATA_ROOT}/neo4j/logs` → `/logs`<br>`${DB_DATA_ROOT}/neo4j/import` → `/var/lib/neo4j/import`<br>`${DB_DATA_ROOT}/neo4j/plugins` → `/plugins` |
 
-`DB_DATA_ROOT` 기본값: `/home/user/arsim/DB_FG` (AutoNexusGraph 전용 — 다른 프로젝트와 분리).
+`DB_DATA_ROOT` 기본값: `/home/user/arsim/DB_ANX` (AutoNexusGraph 전용 — 다른 프로젝트와 분리).
+historic `DB_FG` 경로를 그대로 쓰는 경우, docker-compose 의 volume mount 만 일치하면 이름과 무관하게 동작 (실 데이터 보존).
 
 ## 시나리오 A: 호스트에서 직접
 
@@ -42,7 +59,7 @@ docker compose down -v                   # 데이터까지 삭제 (주의 — bi
 **.env 접속 설정:**
 ```env
 NEO4J_URI=bolt://192.168.88.201:31010
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@192.168.88.201:31011/fingraph
+POSTGRES_DSN=postgresql://autonexusgraph:autonexusgraph_dev@192.168.88.201:31011/autonexusgraph
 DB_DATA_ROOT=/home/user/arsim/DB_FG
 ```
 
@@ -68,7 +85,7 @@ docker compose up -d
 dev 컨테이너의 `.env`:
 ```env
 NEO4J_URI=bolt://192.168.88.201:31010
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@192.168.88.201:31011/fingraph
+POSTGRES_DSN=postgresql://autonexusgraph:autonexusgraph_dev@192.168.88.201:31011/autonexusgraph
 ```
 
 ### B-3) 같은 docker network 에 join (선택 — 컨테이너명으로 통신)
@@ -94,7 +111,7 @@ services:
 dev 컨테이너의 `.env` 변경:
 ```env
 NEO4J_URI=bolt://ar-neo4j:7687           # 컨테이너명 + 내부 포트
-POSTGRES_DSN=postgresql://fingraph:fingraph_dev@ar-postgres:5432/fingraph
+POSTGRES_DSN=postgresql://autonexusgraph:autonexusgraph_dev@ar-postgres:5432/autonexusgraph
 ```
 
 ---
@@ -106,9 +123,9 @@ POSTGRES_DSN=postgresql://fingraph:fingraph_dev@ar-postgres:5432/fingraph
 docker run -d --name ar-postgres \
   --restart unless-stopped \
   -p 31011:5432 \
-  -e POSTGRES_USER=fingraph \
-  -e POSTGRES_PASSWORD=fingraph_dev \
-  -e POSTGRES_DB=fingraph \
+  -e POSTGRES_USER=autonexusgraph \
+  -e POSTGRES_PASSWORD=autonexusgraph_dev \
+  -e POSTGRES_DB=autonexusgraph \
   -e PGDATA=/var/lib/postgresql/data/pgdata \
   -v $(pwd)/infra/postgres/init:/docker-entrypoint-initdb.d:ro \
   -v ~/arsim/DB_FG/postgres:/var/lib/postgresql/data \
@@ -118,7 +135,7 @@ docker run -d --name ar-postgres \
 docker run -d --name ar-neo4j \
   --restart unless-stopped \
   -p 31009:7474 -p 31010:7687 \
-  -e NEO4J_AUTH=neo4j/fingraph_dev \
+  -e NEO4J_AUTH=neo4j/autonexusgraph_dev \
   -e 'NEO4J_PLUGINS=["apoc"]' \
   -v ~/arsim/DB_FG/neo4j/data:/data \
   -v ~/arsim/DB_FG/neo4j/logs:/logs \
