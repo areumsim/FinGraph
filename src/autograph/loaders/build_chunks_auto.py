@@ -44,12 +44,23 @@ def _upsert_chunk(cur, *, source: str, section: str, text: str,
         raise ValueError("metadata['uniq'] 필요")
 
     cur.execute("""
-        SELECT id FROM vec.chunks
+        SELECT id, manufacturer_id, model_id, variant_id FROM vec.chunks
         WHERE source = %s AND metadata->>'uniq' = %s
         LIMIT 1
     """, (source, uniq))
-    if cur.fetchone():
-        return  # 이미 있음
+    existing = cur.fetchone()
+    if existing:
+        # 기존 row 의 NULL 메타만 보강 (이미 채워진 값은 보존).
+        cid, ex_mfr, ex_model, ex_variant = existing
+        if (manufacturer_id and not ex_mfr) or (model_id and not ex_model) or (variant_id and not ex_variant):
+            cur.execute("""
+                UPDATE vec.chunks
+                   SET manufacturer_id = COALESCE(manufacturer_id, %s),
+                       model_id        = COALESCE(model_id, %s),
+                       variant_id      = COALESCE(variant_id, %s)
+                 WHERE id = %s
+            """, (manufacturer_id, model_id, variant_id, cid))
+        return
 
     token_est = max(1, len(text) // 4)
     cur.execute("""

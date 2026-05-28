@@ -59,6 +59,38 @@ def _auto_raw_root() -> Path:
     return get_settings().ingest_raw_dir / "auto"
 
 
+def _resolve_make_model_variant(
+    cur: Any, make_name: str, model_name: str, model_year: int | None,
+) -> tuple[int | None, int | None, int | None]:
+    """make+model+year → (manufacturer_id, model_id, variant_id) 단일 LEFT JOIN 1회.
+
+    이전: row 마다 mfr/model/variant 3 회 SELECT (N+1 패턴, 대량 적재 시 시간↑).
+    현재: 한 쿼리로 모두. 없으면 해당 슬롯이 NULL.
+    """
+    if not make_name:
+        return None, None, None
+    cur.execute("""
+        SELECT mm.manufacturer_id, m.model_id, v.variant_id
+          FROM auto.master_manufacturers mm
+          LEFT JOIN auto.master_vehicle_models m
+            ON m.manufacturer_id = mm.manufacturer_id
+           AND m.name_norm = %s
+          LEFT JOIN auto.master_vehicle_variants v
+            ON v.model_id = m.model_id
+           AND v.model_year = %s::int
+         WHERE mm.name_norm = %s
+         LIMIT 1
+    """, (
+        normalize_corp_name(model_name) if model_name else None,
+        model_year,
+        normalize_corp_name(make_name),
+    ))
+    row = cur.fetchone()
+    if not row:
+        return None, None, None
+    return row[0], row[1], row[2]
+
+
 def _iter_jsonl(path: Path) -> Iterable[dict]:
     if not path.exists():
         return
@@ -272,31 +304,8 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
                     model_name = r.get("Model") or ""
                     model_year = int(r.get("ModelYear") or 0) or None
 
-                    # manufacturer_id / model_id / variant_id 매핑 (vpic 적재 결과 사용).
-                    cur.execute("""
-                        SELECT manufacturer_id FROM auto.master_manufacturers
-                        WHERE name_norm = %s LIMIT 1
-                    """, (normalize_corp_name(make_name),))
-                    row = cur.fetchone()
-                    manufacturer_id = row[0] if row else None
-
-                    model_id = None
-                    if manufacturer_id is not None and model_name:
-                        cur.execute("""
-                            SELECT model_id FROM auto.master_vehicle_models
-                            WHERE manufacturer_id = %s AND name_norm = %s LIMIT 1
-                        """, (manufacturer_id, normalize_corp_name(model_name)))
-                        rr = cur.fetchone()
-                        model_id = rr[0] if rr else None
-
-                    variant_id = None
-                    if model_id is not None and model_year:
-                        cur.execute("""
-                            SELECT variant_id FROM auto.master_vehicle_variants
-                            WHERE model_id = %s AND model_year = %s LIMIT 1
-                        """, (model_id, model_year))
-                        rrr = cur.fetchone()
-                        variant_id = rrr[0] if rrr else None
+                    manufacturer_id, model_id, variant_id = _resolve_make_model_variant(
+                        cur, make_name, model_name, model_year)
 
                     cur.execute("""
                         INSERT INTO auto.events_recalls
@@ -358,34 +367,20 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
             for r in data.get("results") or []:
                 cur.execute("SAVEPOINT sp_complaint")
                 try:
-                    make_name = r.get("make") or ""
-                    model_name = r.get("model") or ""
-                    model_year = int(r.get("modelYear") or 0) or None
+                    # NHTSA complaints 의 make/model/year 은 top-level 이 아니라
+                    # products[0].productMake / productModel / productYear 에 있음.
+                    products = r.get("products") or []
+                    p0 = products[0] if products else {}
+                    make_name = p0.get("productMake") or r.get("make") or ""
+                    model_name = p0.get("productModel") or r.get("model") or ""
+                    py = p0.get("productYear") or r.get("modelYear")
+                    try:
+                        model_year = int(py) if py else None
+                    except (TypeError, ValueError):
+                        model_year = None
 
-                    cur.execute("""
-                        SELECT manufacturer_id FROM auto.master_manufacturers
-                        WHERE name_norm = %s LIMIT 1
-                    """, (normalize_corp_name(make_name),))
-                    row = cur.fetchone()
-                    manufacturer_id = row[0] if row else None
-
-                    model_id = None
-                    if manufacturer_id is not None and model_name:
-                        cur.execute("""
-                            SELECT model_id FROM auto.master_vehicle_models
-                            WHERE manufacturer_id = %s AND name_norm = %s LIMIT 1
-                        """, (manufacturer_id, normalize_corp_name(model_name)))
-                        rr = cur.fetchone()
-                        model_id = rr[0] if rr else None
-
-                    variant_id = None
-                    if model_id is not None and model_year:
-                        cur.execute("""
-                            SELECT variant_id FROM auto.master_vehicle_variants
-                            WHERE model_id = %s AND model_year = %s LIMIT 1
-                        """, (model_id, model_year))
-                        rrr = cur.fetchone()
-                        variant_id = rrr[0] if rrr else None
+                    manufacturer_id, model_id, variant_id = _resolve_make_model_variant(
+                        cur, make_name, model_name, model_year)
 
                     components = []
                     if r.get("components"):
