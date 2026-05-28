@@ -41,6 +41,8 @@ class ChatRequest(BaseModel):
     thread_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     message: str
     use_history: bool = True
+    # 도메인 hint — 'finance' | 'auto' | 'cross_domain'. 미지정 시 router 자동 판정.
+    domain: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -49,6 +51,7 @@ class ChatResponse(BaseModel):
     citations: list[dict]
     question_kind: str | None = None
     target_companies: list[str] = []
+    domain: str | None = None
     cost_usd: float = 0.0
     aborted_reason: str | None = None
     n_tool_results: int = 0
@@ -60,7 +63,8 @@ def chat(req: ChatRequest) -> ChatResponse:
     """단일 대화 turn — agent 실행 + history 적재."""
     history = _load_history(req.thread_id) if req.use_history else []
     try:
-        state = run_agent(req.message, thread_id=req.thread_id, history=history)
+        state = run_agent(req.message, thread_id=req.thread_id,
+                          history=history, domain=req.domain)
     except Exception as e:
         log.exception("[chat] agent failed")
         raise HTTPException(500, f"agent failed: {e}")
@@ -71,6 +75,7 @@ def chat(req: ChatRequest) -> ChatResponse:
                    citations=state.get("citations"),
                    trace={"question_kind": state.get("question_kind"),
                           "target_companies": state.get("target_companies"),
+                          "domain": state.get("domain"),
                           "n_tool_results": len(state.get("tool_results") or []),
                           "cost_usd": state.get("llm_usage_usd"),
                           "aborted_reason": state.get("aborted_reason")})
@@ -81,6 +86,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         citations=state.get("citations") or [],
         question_kind=state.get("question_kind"),
         target_companies=state.get("target_companies") or [],
+        domain=state.get("domain"),
         cost_usd=float(state.get("llm_usage_usd") or 0.0),
         aborted_reason=state.get("aborted_reason"),
         n_tool_results=len(state.get("tool_results") or []),
@@ -105,7 +111,8 @@ def chat_stream(req: ChatRequest) -> StreamingResponse:
             user_msg_logged = False
             for node, st in run_agent_stream(req.message,
                                               thread_id=req.thread_id,
-                                              history=history):
+                                              history=history,
+                                              domain=req.domain):
                 payload: dict[str, Any] = {
                     "node": node,
                     "question_kind": st.get("question_kind"),

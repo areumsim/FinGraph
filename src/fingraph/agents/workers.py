@@ -24,14 +24,127 @@ from .state import AgentState
 log = logging.getLogger(__name__)
 
 
+# ── Domain-aware allowed intent + toolbox ────────────────────
+# finance 도메인 화이트리스트 (기존 그대로).
+_FIN_GRAPH_ALLOWED = {
+    "list_subsidiaries", "list_parents", "get_executives",
+    "get_companies_of_person", "get_major_shareholders",
+    "find_paths", "get_subgraph", "list_mentioning_news",
+    "list_cooccurring", "list_group_members", "lookup_person",
+}
+_FIN_SQL_ALLOWED = {
+    "lookup_company", "get_company_info", "get_revenue",
+    "get_operating_income", "get_balance_sheet_item",
+    "compare_companies", "list_companies_by_market",
+}
+_FIN_RESEARCH_INTENTS = {"search_documents", "search_by_metadata", "get_chunk"}
+
+# auto 도메인 화이트리스트 (autograph.tools 함수명).
+_AUTO_GRAPH_ALLOWED = {
+    "lookup_vehicle_graph", "lookup_supplier",
+    "list_components", "list_recalls_affecting",
+    "get_suppliers_of_component", "get_vehicles_using_component",
+    "find_vehicle_component_paths",
+}
+_AUTO_SQL_ALLOWED = {
+    "lookup_vehicle", "get_vehicle_info", "get_spec",
+    "compare_vehicles", "get_safety_rating",
+    # bridge 도 SQL 워커가 호출 (PG 단일 호출)
+    "bridge_corp_to_entity", "bridge_entity_to_corp", "cross_query",
+}
+_AUTO_RESEARCH_INTENTS = {
+    "search_documents_auto", "search_by_metadata_auto", "get_chunk_auto",
+}
+
+
+def _domain(state: AgentState) -> str:
+    return str(state.get("domain") or "finance").lower()
+
+
+def _toolbox_for(state: AgentState):
+    """도메인별 tool 함수 풀. cross_domain 은 finance + auto 모두 검색."""
+    d = _domain(state)
+    if d == "auto":
+        from autograph import tools as auto_tb
+        return [auto_tb]
+    if d == "cross_domain":
+        from .. import tools as fin_tb
+        from autograph import tools as auto_tb
+        return [auto_tb, fin_tb]
+    from .. import tools as fin_tb
+    return [fin_tb]
+
+
+def _resolve_tool(state: AgentState, intent: str):
+    """intent 이름으로 도메인별 toolbox 에서 함수 검색."""
+    for tb in _toolbox_for(state):
+        fn = getattr(tb, intent, None)
+        if fn is not None:
+            return fn
+    return None
+
+
+def _allowed_intents(state: AgentState, kind: str) -> set[str]:
+    d = _domain(state)
+    if kind == "graph":
+        if d == "auto":
+            return _AUTO_GRAPH_ALLOWED
+        if d == "cross_domain":
+            return _FIN_GRAPH_ALLOWED | _AUTO_GRAPH_ALLOWED
+        return _FIN_GRAPH_ALLOWED
+    if kind == "sql":
+        if d == "auto":
+            return _AUTO_SQL_ALLOWED
+        if d == "cross_domain":
+            return _FIN_SQL_ALLOWED | _AUTO_SQL_ALLOWED
+        return _FIN_SQL_ALLOWED
+    if kind == "research":
+        if d == "auto":
+            return _AUTO_RESEARCH_INTENTS
+        if d == "cross_domain":
+            return _FIN_RESEARCH_INTENTS | _AUTO_RESEARCH_INTENTS
+        return _FIN_RESEARCH_INTENTS
+    return set()
+
+
 # ── Research worker ─────────────────────────────────────────
 def research_worker(state: AgentState, task: dict) -> AgentState:
-    """벡터 검색 (pgvector + 메타 필터)."""
+    """벡터 검색 (pgvector + 메타 필터).
+
+    submodule import 패턴 — 테스트에서 patch('fingraph.tools.retrieve.search_documents')
+    또는 patch('autograph.tools.retrieve.search_documents_auto') 가 정상 작동하도록.
+    """
     from ..tools.retrieve import search_documents, search_by_metadata, get_chunk
 
     intent = task.get("intent") or "search"
     args = dict(task.get("args") or {})
+    domain = _domain(state)
 
+    # auto / cross_domain 에서 search_documents_auto 류 인텐트 호출.
+    if intent in ("search_documents_auto", "search_by_metadata_auto", "get_chunk_auto"):
+        try:
+            from autograph.tools import retrieve as auto_retrieve
+        except ImportError as e:
+            _record(state, task, status="failed",
+                    result={"error": f"autograph.tools unavailable: {e}"})
+            return state
+        fn = getattr(auto_retrieve, intent, None)
+        if fn is None:
+            _record(state, task, status="failed",
+                    result={"error": f"no such tool: {intent}"})
+            return state
+        args.setdefault("query", state.get("question_rewritten") or state.get("question", ""))
+        try:
+            out = fn(**args)
+            _record(state, task, status="done", result=out)
+            if isinstance(out, list):
+                state.setdefault("evidence_chunks", []).extend(out)
+        except Exception as exc:   # noqa: BLE001
+            log.warning("[research:auto] %s failed: %s", intent, exc)
+            _record(state, task, status="failed", result={"error": str(exc)})
+        return state
+
+    # finance (또는 unknown intent) — 기존 동작 보존.
     try:
         if intent == "search_documents":
             out = search_documents(**args)
@@ -54,23 +167,16 @@ def research_worker(state: AgentState, task: dict) -> AgentState:
 
 # ── Graph worker ────────────────────────────────────────────
 def graph_worker(state: AgentState, task: dict) -> AgentState:
-    """Neo4j 관계 탐색 (cypher_guard 통과). args 의 intent 가 함수명."""
-    from .. import tools as toolbox
-
+    """Neo4j 관계 탐색 (cypher_guard 통과). args 의 intent 가 함수명. 도메인 인식."""
     intent = task.get("intent") or ""
     args = dict(task.get("args") or {})
 
-    allowed = {
-        "list_subsidiaries", "list_parents", "get_executives",
-        "get_companies_of_person", "get_major_shareholders",
-        "find_paths", "get_subgraph", "list_mentioning_news",
-        "list_cooccurring", "list_group_members", "lookup_person",
-    }
+    allowed = _allowed_intents(state, "graph")
     if intent not in allowed:
         _record(state, task, status="skipped",
-                result={"error": f"graph intent 미허용: {intent!r}"})
+                result={"error": f"graph intent 미허용 (domain={_domain(state)}): {intent!r}"})
         return state
-    fn = getattr(toolbox, intent, None)
+    fn = _resolve_tool(state, intent)
     if fn is None:
         _record(state, task, status="failed", result={"error": f"no such tool: {intent}"})
         return state
@@ -87,22 +193,16 @@ def graph_worker(state: AgentState, task: dict) -> AgentState:
 
 # ── SQL worker ──────────────────────────────────────────────
 def sql_worker(state: AgentState, task: dict) -> AgentState:
-    """PG 정형 조회. 사전 정의 함수 풀만 (PRD §7.5.10)."""
-    from .. import tools as toolbox
-
+    """PG 정형 조회. 사전 정의 함수 풀만 (PRD §7.5.10). 도메인 인식."""
     intent = task.get("intent") or ""
     args = dict(task.get("args") or {})
 
-    allowed = {
-        "lookup_company", "get_company_info", "get_revenue",
-        "get_operating_income", "get_balance_sheet_item",
-        "compare_companies", "list_companies_by_market",
-    }
+    allowed = _allowed_intents(state, "sql")
     if intent not in allowed:
         _record(state, task, status="skipped",
-                result={"error": f"sql intent 미허용: {intent!r}"})
+                result={"error": f"sql intent 미허용 (domain={_domain(state)}): {intent!r}"})
         return state
-    fn = getattr(toolbox, intent, None)
+    fn = _resolve_tool(state, intent)
     if fn is None:
         _record(state, task, status="failed", result={"error": f"no such tool: {intent}"})
         return state

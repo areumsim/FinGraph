@@ -63,6 +63,19 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+    # 도메인 모드 — finance / auto / cross_domain (PRD v2.0 AutoGraph).
+    if "domain_mode" not in st.session_state:
+        st.session_state.domain_mode = "auto-detect"
+    st.session_state.domain_mode = st.radio(
+        "도메인 모드",
+        options=["auto-detect", "finance", "auto", "cross_domain"],
+        index=["auto-detect", "finance", "auto", "cross_domain"].index(
+            st.session_state.domain_mode
+        ),
+        help="auto-detect 면 질문 키워드로 router 가 자동 판정. 자동차 도메인은 'auto'.",
+    )
+
+    st.divider()
     render_cost_badge(
         st.session_state.cumulative_cost_usd,
         st.session_state.last_turn_cost_usd,
@@ -128,9 +141,12 @@ if user_input:
             with st.status("분석 중…", expanded=True) as status:
                 last_state = None
                 interrupted_payload = None
+                _dm = st.session_state.get("domain_mode") or "auto-detect"
+                _domain = None if _dm == "auto-detect" else _dm
                 for node, state in run_agent_stream(
                     user_input, thread_id=thread_id,
                     history=st.session_state.messages[-10:],
+                    domain=_domain,
                 ):
                     last_state = state
                     if node == "__final__":

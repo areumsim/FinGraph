@@ -17,7 +17,7 @@ class VectorAdapter(AgentAdapter):
     def __init__(self, top_k: int = 8) -> None:
         self.top_k = top_k
 
-    def query(self, question: str) -> AgentResponse:
+    def query(self, question: str, *, domain: str | None = None) -> AgentResponse:  # noqa: ARG002 — vector-only 는 도메인 무관.
         from fingraph.tools.retrieve import search_documents
         from fingraph.llm.base import get_llm_client
         from fingraph.llm.budget_aware import budget_aware_client

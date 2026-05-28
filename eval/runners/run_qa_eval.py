@@ -176,7 +176,7 @@ def run_adapter_on_gold(
         print(f"  [{adapter.name}] {i}/{total} qid={qid}", flush=True)
         from eval.adapters.base import AgentResponse
         try:
-            resp = adapter.query(row["question"])
+            resp = adapter.query(row["question"], domain=row.get("domain"))
         except Exception as exc:  # noqa: BLE001
             resp = AgentResponse(
                 refused=True,

@@ -216,8 +216,9 @@ def _run_with_fallback_chain(state: AgentState) -> AgentState:
 
 def run_agent(question: str, *,
               thread_id: str = "default",
-              history: list[dict] | None = None) -> AgentState:
-    state: AgentState = _init_state(question, thread_id, history)
+              history: list[dict] | None = None,
+              domain: str | None = None) -> AgentState:
+    state: AgentState = _init_state(question, thread_id, history, domain=domain)
     if _HAS_LANGGRAPH:
         try:
             return _run_with_langgraph(state)
@@ -229,20 +230,21 @@ def run_agent(question: str, *,
 
 def run_agent_stream(question: str, *,
                      thread_id: str = "default",
-                     history: list[dict] | None = None
+                     history: list[dict] | None = None,
+                     domain: str | None = None
                      ) -> Iterator[tuple[str, AgentState]]:
     """노드별 partial state stream — UI/SSE 용 (PRD §7.6.5).
 
     yields (node_name, partial_state). 마지막은 ('__final__', final_state).
     """
-    state: AgentState = _init_state(question, thread_id, history)
+    state: AgentState = _init_state(question, thread_id, history, domain=domain)
     if _HAS_LANGGRAPH:
         try:
             yield from _stream_with_langgraph(state)
             return
         except Exception as exc:   # noqa: BLE001
             log.warning("[run_agent_stream] LangGraph stream 실패 — 함수 체인 폴백: %s", exc)
-            state = _init_state(question, thread_id, history)
+            state = _init_state(question, thread_id, history, domain=domain)
     yield from _stream_with_fallback_chain(state)
 
 
@@ -365,11 +367,20 @@ def _stream_with_fallback_chain(state: AgentState) -> Iterator[tuple[str, AgentS
     yield ("__final__", state)
 
 
-def _init_state(question: str, thread_id: str, history: list[dict] | None) -> AgentState:
+def _init_state(question: str, thread_id: str, history: list[dict] | None,
+                *, domain: str | None = None) -> AgentState:
+    """초기 state. domain 미지정 시 자동 라우터로 결정 ('finance' 기본)."""
+    if not domain:
+        try:
+            from autograph.policy import route_domain
+            domain = route_domain(question, hint=None)
+        except Exception:  # noqa: BLE001
+            domain = "finance"
     return {
         "thread_id": thread_id,
         "question": question,
         "history": history or [],
+        "domain": domain,
         "llm_usage_usd": 0.0,
         "n_replans": 0,
         "validation_status": "pending",

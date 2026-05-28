@@ -76,6 +76,11 @@ class AgentAdapter(ABC):
     version: str = ""
 
     @abstractmethod
-    def query(self, question: str) -> AgentResponse:
-        """질문 → 정규화된 AgentResponse. latency / cost 는 어댑터가 측정."""
+    def query(self, question: str, *,
+              domain: str | None = None) -> AgentResponse:
+        """질문 → 정규화된 AgentResponse. latency / cost 는 어댑터가 측정.
+
+        ``domain`` 은 gold record 의 'domain' 필드를 그대로 전달 — auto/finance/cross_domain
+        라우팅 힌트로만 사용. None 이면 어댑터(혹은 그 하부 에이전트)가 자동 판정.
+        """
         raise NotImplementedError

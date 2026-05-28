@@ -23,6 +23,10 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     question: str
     history: list[dict]               # 이전 messages — multi-turn 컨텍스트
+    domain: str                       # 'finance' | 'auto' | 'cross_domain' (default 'finance')
+    target_vehicles: list[int]        # AutoGraph variant_id 목록 (auto/cross_domain)
+    target_models: list[int]          # AutoGraph model_id 목록
+    target_makes: list[str]           # AutoGraph make 이름 (raw — lookup_vehicle 결과 보조)
 
     # 전처리 (rewriter / temporal 결과)
     question_rewritten: str           # coreference 해소 + 시점 정규화된 query

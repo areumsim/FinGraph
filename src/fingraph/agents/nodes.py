@@ -169,6 +169,42 @@ def planner_node(state: AgentState) -> AgentState:
     year_hint = extract_year_hint(state.get("question_rewritten") or state.get("question", ""))
     q = state.get("question_rewritten") or state.get("question", "")
 
+    # ── 도메인 분기 — auto / cross_domain 은 autograph.policy 로 위임 ──
+    domain = str(state.get("domain") or "finance").lower()
+    if domain == "auto":
+        try:
+            from autograph.policy import plan_auto_tasks
+            tasks = plan_auto_tasks(
+                question=q,
+                target_vehicles=state.get("target_vehicles") or [],
+                target_models=state.get("target_models") or [],
+                target_makes=state.get("target_makes") or [],
+            )
+            state["tasks"] = tasks
+            state["task_results"] = {}
+            state["plan"] = [{"tool": t["intent"], "args": t["args"],
+                              "purpose": f"{t['agent']}:{t['intent']}"} for t in tasks]
+            log.info("[planner:auto] tasks=%d", len(tasks))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[planner:auto] failed — fallback to research: %s", exc)
+            state["tasks"] = []
+            state["plan"] = []
+        return _planner_cost_gate(state, kind, targets, len(state.get("tasks") or []))
+    if domain == "cross_domain":
+        try:
+            from autograph.policy import plan_cross_domain_tasks
+            tasks = plan_cross_domain_tasks(question=q, target_companies=targets)
+            state["tasks"] = tasks
+            state["task_results"] = {}
+            state["plan"] = [{"tool": t["intent"], "args": t["args"],
+                              "purpose": f"{t['agent']}:{t['intent']}"} for t in tasks]
+            log.info("[planner:cross_domain] tasks=%d", len(tasks))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[planner:cross_domain] failed: %s", exc)
+            state["tasks"] = []
+            state["plan"] = []
+        return _planner_cost_gate(state, kind, targets, len(state.get("tasks") or []))
+
     tasks: list[dict] = []
     tid = 0
 
@@ -269,7 +305,15 @@ def planner_node(state: AgentState) -> AgentState:
     log.info("[planner] kind=%s targets=%d tasks=%d (DAG)",
              kind, len(targets), len(tasks))
 
-    # ── Cost approval (PRD §7.5.6) ──────────────────────────
+    return _planner_cost_gate(state, kind, targets, len(tasks))
+
+
+def _planner_cost_gate(state: "AgentState", kind: str, targets: list,
+                       n_tasks: int) -> "AgentState":
+    """planner 의 cost-approval 게이트 — finance/auto/cross_domain 모두 공통.
+
+    PRD §7.5.6 HITL. replan 중이거나 이미 승인된 turn 은 skip.
+    """
     from .cost_estimator import needs_cost_approval
     from .interrupts import (
         InterruptUnavailable,
@@ -280,8 +324,8 @@ def planner_node(state: AgentState) -> AgentState:
 
     pi = state.get("pending_interrupt") or {}
     resp = state.get("interrupt_response")
+    domain = str(state.get("domain") or "finance")
 
-    # (A) Resume 경로 — pending_interrupt=cost_approval + 응답이 이미 있음 → 적용
     if pi.get("kind") == "cost_approval" and resp is not None and not state.get("interrupt_handled"):
         approved = coerce_cost_response(resp)
         state["interrupt_handled"] = True
@@ -291,13 +335,12 @@ def planner_node(state: AgentState) -> AgentState:
             log.info("[planner] cost_approval 거절 — turn 종료")
             return state
         log.info("[planner] cost_approval 승인 (resume) — 진행")
-    # (B) 새 interrupt 발동 — replan 중에는 안 묻고, 이미 승인된 turn 도 skip
     elif not state.get("n_replans") and not state.get("interrupt_handled"):
         need, est = needs_cost_approval(state)
         if need:
             summary = (
-                f"질문 유형: {kind}, 회사 수: {len(targets)}, "
-                f"task: {len(tasks)}개, 모델: {est.model} "
+                f"도메인: {domain}, 질문 유형: {kind}, 대상: {len(targets)}, "
+                f"task: {n_tasks}개, 모델: {est.model} "
                 f"(replan 최대 {est.replan_factor}회 포함)"
             )
             payload = make_cost_approval_payload(

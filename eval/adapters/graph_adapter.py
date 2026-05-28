@@ -14,7 +14,7 @@ class GraphAdapter(AgentAdapter):
     name = "graph"
     version = "0.1"
 
-    def query(self, question: str) -> AgentResponse:
+    def query(self, question: str, *, domain: str | None = None) -> AgentResponse:  # noqa: ARG002 — graph-only 는 finance 그래프만 본다.
         from fingraph.agents.policy import classify_question
         from fingraph.tools.graph import lookup_company, list_subsidiaries, get_executives, get_major_shareholders
         from fingraph.llm.base import get_llm_client

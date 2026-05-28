@@ -198,9 +198,10 @@ class CheckpointStore:
     def __init__(self, source: str, state_root: Path | None = None) -> None:
         self.source = source
         root = state_root or (get_settings().ingest_raw_dir.parent / "state" / "ingest")
-        root.mkdir(parents=True, exist_ok=True)
         self.done_path = root / f"{source}.done.jsonl"
         self.failed_path = root / f"{source}.failed.jsonl"
+        # source 에 '/' 가 포함된 경우 (예: 'auto/nhtsa_vpic') 도 안전하게.
+        self.done_path.parent.mkdir(parents=True, exist_ok=True)
         self._done: set[str] = self._load_done()
         self.stats = CheckpointStats()
 

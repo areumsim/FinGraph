@@ -15,7 +15,7 @@ class SqlVecAdapter(AgentAdapter):
     name = "sql_vec"
     version = "0.1"
 
-    def query(self, question: str) -> AgentResponse:
+    def query(self, question: str, *, domain: str | None = None) -> AgentResponse:  # noqa: ARG002 — sql_vec 는 finance 전용.
         from fingraph.tools.financials import lookup_company, get_revenue, get_operating_income
         from fingraph.tools.retrieve import search_documents
         from fingraph.llm.base import get_llm_client

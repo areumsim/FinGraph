@@ -14,12 +14,13 @@ class HybridAdapter(AgentAdapter):
     name = "hybrid"
     version = "0.1"
 
-    def query(self, question: str) -> AgentResponse:
+    def query(self, question: str, *,
+              domain: str | None = None) -> AgentResponse:
         from fingraph.agents import run_agent
 
         t0 = time.monotonic()
         try:
-            state = run_agent(question)
+            state = run_agent(question, domain=domain)
         except Exception as e:
             return AgentResponse(
                 refused=True, refusal_reason=f"agent_failed:{e}",
