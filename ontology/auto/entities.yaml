@@ -1,0 +1,183 @@
+# AutoGraph 자동차 도메인 엔티티 정의 (SSOT).
+#
+# 본 파일은 src/autograph/ontology.py 가 로드해서:
+#   - Neo4j 제약/인덱스 생성 (neo4j_init.py)
+#   - LLM 프롬프트의 entity_types_table 주입 (extractors/prompts/relation_extract_auto.yaml)
+#   - P4 cross-validate 의 schema 검증 (extractors/cross_validate.py)
+# 에서 사용한다.
+#
+# 명세 규칙 (finance ontology 와 동일):
+#   type           : Neo4j 라벨 (PascalCase)
+#   key            : 자연 키 (없으면 내부 seq)
+#   required       : 노드 생성 필수 속성
+#   optional       : 보조 속성 (없어도 OK)
+#   pg_table       : PG SSOT 테이블
+#   provenance_src : 어디서 만들어지는지 (extractors.yaml 참조)
+#   bom_level      : BOM 계층 (0..5). 없으면 사이드 홉.
+
+version: 1
+domain: automotive
+last_updated: 2026-05-28
+
+entities:
+
+  Manufacturer:
+    description: 완성차 OEM 또는 부품 제조사
+    key: id                    # auto.master_manufacturers.manufacturer_id (BIGINT)
+    bom_level: 0
+    required: [id, name]
+    optional:
+      - name_norm
+      - country
+      - wikidata_qid
+      - aliases
+      - source
+      - snapshot_year
+    pg_table: auto.master_manufacturers
+    provenance_src: [nhtsa_vpic, wikidata]
+
+  VehicleModel:
+    description: 차종 — 제조사 × 모델명 × 시장 단위.
+    key: id                    # auto.master_vehicle_models.model_id (BIGSERIAL)
+    bom_level: 1
+    required: [id, name]
+    optional:
+      - name_norm
+      - market
+      - wikidata_qid
+      - aliases
+    pg_table: auto.master_vehicle_models
+    provenance_src: [nhtsa_vpic, wikidata]
+
+  VehicleVariant:
+    description: 트림/연식 — (model_id, model_year, trim, fuel_type) 단위.
+    key: id                    # auto.master_vehicle_variants.variant_id (BIGSERIAL)
+    bom_level: 2
+    required: [id]
+    optional:
+      - model_year
+      - trim
+      - fuel_type
+      - body_class
+      - drive_type
+      - transmission
+    pg_table: auto.master_vehicle_variants
+    provenance_src: [nhtsa_vpic, nhtsa_canspec]
+
+  System:
+    description: |
+      차량 시스템 (Level 3) — 파워트레인 / ADAS / 브레이크 / 차체 / 전장 …
+      코드는 system_taxonomy.yaml 에서 SSOT.
+    key: code                  # 대문자 SCREAMING_SNAKE (예 POWERTRAIN, BRAKE)
+    bom_level: 3
+    required: [code, name]
+    optional: [description, parent_code]
+    pg_table: auto.components             # level=3 row
+    provenance_src: [system_taxonomy_seed, aihub]
+
+  Module:
+    description: 시스템 내 모듈 (Level 4) — 가솔린 엔진, 배터리 팩, ABS 모듈 등.
+    key: id                    # auto.components.component_id (level=4)
+    bom_level: 4
+    required: [id, name]
+    optional:
+      - name_norm
+      - system_code
+      - aliases
+      - wikidata_qid
+    pg_table: auto.components
+    provenance_src: [aihub, recall_component_match, llm_p3]
+
+  Part:
+    description: 부품 (Level 5) — 인젝터, BMS, 인플레이터 등.
+    key: id                    # auto.components.component_id (level=5)
+    bom_level: 5
+    required: [id, name]
+    optional:
+      - name_norm
+      - parent_module_id
+      - aliases
+      - wikidata_qid
+    pg_table: auto.components
+    provenance_src: [recall_component_match, llm_p3]
+
+  Supplier:
+    description: 부품 공급사 (Tier1/2). bridge.corp_entity 에서 supplier_id 발급.
+    key: entity_id             # stringified supplier_id (auto.master_suppliers.supplier_id)
+    required: [entity_id, name]
+    optional:
+      - name_norm
+      - country
+      - wikidata_qid
+      - corp_code              # 한국 상장사일 때만 — Cross-Domain Bridge 진입점
+      - match_method
+      - confidence_score
+    pg_table: auto.master_suppliers
+    provenance_src: [wikidata_suppliers, bridge_corp_entity]
+
+  Recall:
+    description: 리콜 캠페인 (NHTSA / KOTSA / KATRI).
+    key: id                    # auto.events_recalls.recall_id (BIGSERIAL)
+    required: [id, source, source_recall_no]
+    optional:
+      - report_date
+      - country
+      - component_text          # 원문 (정규화 전)
+      - summary
+      - consequence
+      - remedy
+      - affected_units
+      - snapshot_year
+    pg_table: auto.events_recalls
+    provenance_src: [nhtsa_recalls, car_go_kr_recalls]
+
+  Complaint:
+    description: 소비자 결함신고 — NHTSA Complaints.
+    key: id                    # auto.events_complaints.complaint_id
+    required: [id, source, source_complaint_no]
+    optional:
+      - filed_date
+      - incident_date
+      - summary
+      - country
+    pg_table: auto.events_complaints
+    provenance_src: [nhtsa_complaints]
+
+  Investigation:
+    description: |
+      NHTSA ODI 결함 조사 (리콜 전단계). NHTSA_ACTION_NUMBER 단위 (예 PE12001).
+      investigation_type 필드: PE/EA/RQ/AQ/DP — action_number 앞 2글자.
+    key: id                    # auto.events_investigations.investigation_id
+    required: [id, source, action_number]
+    optional:
+      - investigation_type
+      - opened_date
+      - closed_date
+      - subject
+      - summary
+      - campno                 # 종결된 리콜 캠페인 (있을 때)
+      - mfr_name
+      - country
+      - snapshot_year
+    pg_table: auto.events_investigations
+    provenance_src: [nhtsa_odi_investigations]
+
+  Standard:
+    description: 안전·환경·인증 규격 (FMVSS / KS R / ECE / NCAP / KNCAP …).
+    key: code                  # 대문자 표준 코드
+    required: [code, name]
+    optional: [region, agency, url]
+    pg_table: null              # YAML seed (ontology/auto/standards.yaml)
+    provenance_src: [standards_seed]
+
+  Plant:
+    description: 생산공장 (Hyundai Ulsan / Kia Hwaseong 등).
+    key: code                  # 'HYU_ULSAN' 같은 인공 코드
+    required: [code, name]
+    optional:
+      - manufacturer_id
+      - country
+      - city
+      - wikidata_qid
+    pg_table: null              # YAML seed (ontology/auto/plants.yaml)
+    provenance_src: [plants_seed, wikidata]

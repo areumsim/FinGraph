@@ -110,10 +110,11 @@ def compare_vehicles(variant_ids: list[int],
 
 # ── 안전 등급 ────────────────────────────────────────────────
 def get_safety_rating(variant_id: int) -> dict | None:
-    """NCAP/IIHS 안전 등급.
+    """NCAP / IIHS 안전 등급.
 
-    TODO: NCAP·IIHS 데이터 소스 미수집 — MVP 에서는 spec_measurements 에 'safety.*' 키로
-    들어온 값이 있으면 반환, 없으면 None.
+    ``auto.spec_measurements`` 의 'safety.*' 키를 모두 반환. NHTSA NCAP 은
+    `load_auto_safety` 가 'safety.ncap.*' / 'safety.feature.*' 로 채운다.
+    KNCAP / Euro NCAP / IIHS 는 별도 ingest 모듈이 추가되면 같은 prefix 로 합류.
     """
     rows = query_dicts("""
         SELECT measure_key, value_num, value_text, unit, source, confidence

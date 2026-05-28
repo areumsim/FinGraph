@@ -97,7 +97,11 @@ class Settings(BaseSettings):
     agent_max_replan: int = 2
     agent_query_budget_sec: int = 40
     agent_max_answer_len: int = 5000
-    agent_turn_budget_usd: float = 0.20    # 한 대화 turn 의 최대 LLM 비용
+    agent_turn_budget_usd: float = 0.20    # 한 대화 turn 의 최대 LLM 비용 (도메인 기본값)
+    # 도메인별 override — 0.0 이면 agent_turn_budget_usd 상속.
+    # auto 도메인은 LLM 추출 (P3) 이 cross 분야 보다 무거울 수 있어 별도 한도 권장.
+    agent_turn_budget_auto_usd: float = 0.0
+    agent_turn_budget_cross_domain_usd: float = 0.0
 
     # === LangGraph checkpoint (PRD §7.5.8) ===
     # auto = PG 시도 → memory 폴백, memory/in_memory = 강제 in-memory, none = 비활성
@@ -135,3 +139,21 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """프로세스 단위 싱글톤. 테스트에서 override 하려면 cache_clear() 호출."""
     return Settings()
+
+
+def turn_budget_for_domain(domain: str | None) -> float:
+    """state["domain"] 에 맞는 turn budget — 0.0 override 면 기본값 상속.
+
+    finance / 미지정 → agent_turn_budget_usd
+    auto              → agent_turn_budget_auto_usd or agent_turn_budget_usd
+    cross_domain      → agent_turn_budget_cross_domain_usd or agent_turn_budget_usd
+    """
+    s = get_settings()
+    d = str(domain or "finance").lower()
+    if d == "auto":
+        v = float(s.agent_turn_budget_auto_usd or 0.0)
+        return v if v > 0 else float(s.agent_turn_budget_usd)
+    if d == "cross_domain":
+        v = float(s.agent_turn_budget_cross_domain_usd or 0.0)
+        return v if v > 0 else float(s.agent_turn_budget_usd)
+    return float(s.agent_turn_budget_usd)

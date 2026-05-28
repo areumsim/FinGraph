@@ -80,10 +80,36 @@ SELECT ?supplier ?supplierLabel ?countryLabel ?lei ?biznoKR WHERE {
 LIMIT 5000
 """
 
+# 자동차 부품 → 공급사 (P176 "manufactured by") 매핑. Wikidata 의 part-supplier
+# 트리는 희소하지만 deterministic A/B 출처라 seed 가치가 있다. 결과는 staging_relations
+# 에 candidate 로 적재 → P4 cross_validate 가 Neo4j 로 promote.
+SPARQL_PART_SUPPLIES = """
+SELECT DISTINCT ?part ?partLabel ?supplier ?supplierLabel ?countryLabel WHERE {
+  ?part wdt:P31/wdt:P279* ?cls .
+  VALUES ?cls {
+    wd:Q1183344    # vehicle part
+    wd:Q3454322    # automobile part / motor vehicle component
+    wd:Q44539      # internal combustion engine
+    wd:Q189075     # transmission
+    wd:Q12888      # battery
+    wd:Q193039     # tire
+    wd:Q187588     # brake
+    wd:Q1267283    # airbag
+    wd:Q191768     # alternator
+    wd:Q23905      # spark plug
+  }
+  ?part wdt:P176 ?supplier .
+  OPTIONAL { ?supplier wdt:P17 ?country . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ko,en". }
+}
+LIMIT 5000
+"""
+
 QUERIES = {
     "manufacturers": SPARQL_MANUFACTURERS,
     "models":        SPARQL_MODELS,
     "suppliers":     SPARQL_SUPPLIERS,
+    "part_supplies": SPARQL_PART_SUPPLIES,
 }
 
 

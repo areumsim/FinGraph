@@ -15,9 +15,23 @@
         build-wiki-chunks validate-quality \
         migrate-schema install-agent enable-langgraph trace-on trace-off \
         ingest-auto-vpic ingest-auto-recalls ingest-auto-complaints \
-        ingest-auto-wikidata ingest-auto-all \
+        ingest-auto-wikidata ingest-auto-safety ingest-auto-wikipedia \
+        ingest-auto-epa ingest-auto-investigations ingest-auto-sec-oem \
+        ingest-auto-all \
         load-auto-pg load-auto-neo4j load-auto-bridge \
-        build-chunks-auto neo4j-init-auto load-auto-all eval-auto
+        build-chunks-auto neo4j-init-auto load-auto-all eval-auto \
+        load-auto-recall-components load-auto-supplier-edges \
+        load-auto-seed-standards-plants load-auto-complaints-neo4j \
+        load-auto-aihub load-auto-specs load-auto-safety load-auto-epa \
+        load-auto-investigations load-auto-oem-sec \
+        derive-auto-contains-system load-wikidata-part-supplies \
+        extract-auto-p3 extract-auto-p3-cost validate-auto-p4 extract-validate-auto \
+        audit-bom-coverage audit-edge-meta audit-dod \
+        validate-gold-qa eval-cross \
+        ingest-datagokr-recalls ingest-datagokr-inspections \
+        ingest-car-go-kr ingest-katri ingest-kncap \
+        load-manufactured-at load-datagokr-recalls load-datagokr-inspections \
+        load-kncap
 
 # 호스트가 Ubuntu/Debian 계열이면 `python` 없이 `python3` 만 있을 수 있음 — auto-detect.
 # 명시 지정하려면: make PYTHON=python3.11 ...
@@ -56,6 +70,40 @@ help:
 	@echo "  build-chunks    DART zip → vec.chunks (embedding NULL, ~73만 row)"
 	@echo "  embed-chunks    BGE-M3 호출 → embedding 채우기 (BGE 서버 필요)"
 	@echo "  load-graph      Neo4j Company/Market/Sector/Person 노드 + 관계"
+	@echo ""
+	@echo "── AutoGraph (자동차 도메인) ──"
+	@echo "  ingest-auto-all                   NHTSA vPIC/recalls/complaints/safety + Wikidata"
+	@echo "  ingest-auto-safety                NHTSA SafetyRatings (NCAP 5★ 등급)"
+	@echo "  ingest-auto-wikipedia             자동차 모델/제조사 Wikipedia 본문 (ko fallback en)"
+	@echo "  load-auto-all                     PG → Neo4j 풀 체인 (specs/safety/aihub/seed/recall→comp/derive 포함)"
+	@echo "  load-auto-aihub                   AI Hub 71347/578 → :Module + CONTAINS_COMPONENT"
+	@echo "  load-auto-specs                   canspec → spec_measurements + variant 보강"
+	@echo "  load-auto-safety                  NCAP raw → spec_measurements(safety.*) + SAFETY_RATED_BY"
+	@echo "  load-auto-supplier-edges          supplier_seed.yaml → :SUPPLIED_BY (manual A grade)"
+	@echo "  load-auto-recall-components       recall.component_text → :RECALL_OF (deterministic)"
+	@echo "  load-auto-seed-standards-plants   :Standard + :Plant + :OWNS_PLANT 시드"
+	@echo "  load-auto-complaints-neo4j        :Complaint + :REPORTED_IN"
+	@echo "  derive-auto-contains-system       (VehicleModel)-[:CONTAINS_SYSTEM]->(System) 유도 적재"
+	@echo "  extract-auto-p3-cost              P3 LLM 비용 dry-run (호출 없이 토큰 추정)"
+	@echo "  extract-auto-p3                   P3 LLM 추출 → auto.staging_relations"
+	@echo "  validate-auto-p4                  P4 cross-validate → Neo4j 적재"
+	@echo "  extract-validate-auto             P3 → P4 한 번에"
+	@echo "  eval-auto                         자동차 QA 평가셋 실행"
+	@echo "  eval-cross                        Cross-Domain QA (PRD §8.1 CD-L1~L4)"
+	@echo ""
+	@echo "── DoD audit (PRD §10) ──"
+	@echo "  audit-bom-coverage                Level 0~5 노드 + L4 coverage 측정"
+	@echo "  audit-edge-meta                   PRD §6.7 의무 메타 invariant (strict)"
+	@echo "  audit-dod                         14 항목 트래픽라이트 리포트"
+	@echo "  validate-gold-qa                  eval/qa_gold/*.jsonl 스키마/엔티티 lint"
+	@echo ""
+	@echo "── 외부 데이터 (graceful skip 패턴 — 키 없으면 스킵) ──"
+	@echo "  ingest-datagokr-recalls           data.go.kr 15089863 한국 리콜"
+	@echo "  ingest-datagokr-inspections       data.go.kr 15155857 수리검사"
+	@echo "  ingest-car-go-kr                  car.go.kr CSV 파싱 (수동 다운)"
+	@echo "  ingest-katri                      KATRI / bigdata-tic.kr (OAuth)"
+	@echo "  ingest-kncap                      KNCAP 안전등급"
+	@echo "  load-manufactured-at              모델↔공장 seed → MANUFACTURED_AT"
 	@echo ""
 	@echo "  clean           __pycache__/.pytest_cache 삭제"
 
@@ -266,7 +314,26 @@ ingest-auto-complaints:
 ingest-auto-wikidata:
 	$(PYTHON) -m autograph.ingestion.wikidata_auto --all
 
-ingest-auto-all: ingest-auto-vpic ingest-auto-wikidata ingest-auto-recalls ingest-auto-complaints
+ingest-auto-safety:
+	$(PYTHON) -m autograph.ingestion.nhtsa_safety_ratings --make $(MAKE) --year $(YEAR)
+
+# Wikipedia 자동차 본문 (ko 1차 + en fallback). PG 의 master 테이블에서 entity 리스트 추출.
+ingest-auto-wikipedia:
+	$(PYTHON) -m autograph.ingestion.wikipedia_auto --all --lang ko --fallback-lang en
+
+# EPA fueleconomy.gov bulk CSV (US 차량 연비·엔진·배출 spec, 키 불필요).
+ingest-auto-epa:
+	$(PYTHON) -m autograph.ingestion.epa_fueleconomy
+
+# NHTSA ODI Investigations — 리콜 전단계 결함 조사 bulk flat-file (키 불필요, daily).
+ingest-auto-investigations:
+	$(PYTHON) -m autograph.ingestion.nhtsa_investigations
+
+# SEC EDGAR Company Facts — 글로벌 OEM XBRL 재무 (키 불필요).
+ingest-auto-sec-oem:
+	$(PYTHON) -m autograph.ingestion.sec_oem
+
+ingest-auto-all: ingest-auto-vpic ingest-auto-wikidata ingest-auto-recalls ingest-auto-complaints ingest-auto-safety ingest-auto-wikipedia ingest-auto-epa ingest-auto-investigations ingest-auto-sec-oem
 	@echo "[autograph] ingest-auto-all done."
 
 neo4j-init-auto:
@@ -284,11 +351,139 @@ load-auto-bridge:
 build-chunks-auto:
 	$(PYTHON) -m autograph.loaders.build_chunks_auto --source all
 
-load-auto-all: neo4j-init-auto load-auto-pg load-auto-neo4j load-auto-bridge build-chunks-auto
+# BOM 계층 + 공급망 / 표준 / 공장 / 컴플레인 / 리콜→부품 매칭 (P2 deterministic 추가 패스).
+load-auto-recall-components:
+	$(PYTHON) -m autograph.loaders.load_recall_components
+
+load-auto-supplier-edges:
+	$(PYTHON) -m autograph.loaders.load_supplier_edges
+
+load-auto-seed-standards-plants:
+	$(PYTHON) -m autograph.loaders.load_seed_standards_plants
+
+load-auto-complaints-neo4j:
+	$(PYTHON) -m autograph.loaders.load_complaints_neo4j
+
+load-auto-aihub:
+	$(PYTHON) -m autograph.loaders.load_auto_aihub --dataset all
+
+load-auto-specs:
+	$(PYTHON) -m autograph.loaders.load_auto_specs
+
+load-auto-safety:
+	$(PYTHON) -m autograph.loaders.load_auto_safety
+
+# EPA fueleconomy.gov CSV → spec_measurements. variant 매칭 후 멱등 적재.
+load-auto-epa:
+	$(PYTHON) -m autograph.loaders.load_auto_epa
+
+# NHTSA ODI Investigations → auto.events_investigations + Neo4j INVESTIGATED_BY.
+load-auto-investigations:
+	$(PYTHON) -m autograph.loaders.load_auto_investigations
+
+# SEC EDGAR OEM facts → auto.oem_financials_sec + bridge.corp_entity (sec_cik).
+load-auto-oem-sec:
+	$(PYTHON) -m autograph.loaders.load_auto_oem_sec
+
+# (VehicleModel)-[:CONTAINS_SYSTEM]->(System) — derived after CONTAINS_COMPONENT 적재.
+derive-auto-contains-system:
+	$(PYTHON) -m autograph.loaders.derive_contains_system
+
+# Wikidata P176 (manufactured by) — 부품↔공급사 staging seed (B 등급 0.80).
+# 이후 validate-auto-p4 가 Neo4j SUPPLIED_BY 로 promote.
+load-wikidata-part-supplies:
+	$(PYTHON) -m autograph.loaders.load_wikidata_part_supplies
+
+# 전체 P2 적재 — 의존 순서를 명시.
+#   neo4j-init → master → standards seed → safety/epa → 계층/공급/컴플 → derive → wikidata staging
+# load-auto-safety 는 standards 시드 이후 (Standard {code:'NCAP_US'} 노드 필요).
+# load-auto-epa 는 variant 마스터 적재 이후 (matching 대상).
+# derive-auto-contains-system 은 aihub (CONTAINS_COMPONENT) 이후.
+# load-wikidata-part-supplies 는 wikidata raw 적재 이후 — staging 만 채움 (Neo4j 는 P4).
+load-auto-all: neo4j-init-auto load-auto-pg load-auto-specs load-auto-neo4j \
+               load-auto-bridge load-auto-seed-standards-plants \
+               load-auto-safety load-auto-epa load-auto-aihub \
+               load-auto-supplier-edges \
+               load-auto-complaints-neo4j load-auto-recall-components \
+               load-auto-investigations load-auto-oem-sec \
+               derive-auto-contains-system \
+               load-wikidata-part-supplies \
+               load-manufactured-at \
+               build-chunks-auto
 	@echo "[autograph] load-auto-all done."
+
+# ── P3 LLM 추출 + P4 검증 (LLM 호출 비용 발생 — 명시적으로만 실행).
+# 비용만 추정 (LLM 호출 안 함): make extract-auto-p3-cost
+extract-auto-p3-cost:
+	$(PYTHON) -m autograph.extractors.run_p3 \
+	    --manufacturer-ids $(MFR_IDS) --limit $(P3_LIMIT) --dry-run-cost
+
+P3_LIMIT ?= 50
+MFR_IDS  ?= 498
+# 실제 LLM 호출 — hard limit USD (BudgetExceeded 보호).
+P3_HARD_LIMIT ?= 2.0
+extract-auto-p3:
+	$(PYTHON) -m autograph.extractors.run_p3 \
+	    --manufacturer-ids $(MFR_IDS) --limit $(P3_LIMIT) \
+	    --hard-limit-usd $(P3_HARD_LIMIT)
+
+validate-auto-p4:
+	$(PYTHON) -m autograph.extractors.cross_validate
+
+# P3 → P4 → Neo4j (전체).
+extract-validate-auto: extract-auto-p3 validate-auto-p4
+	@echo "[autograph] P3+P4 done."
 
 eval-auto:
 	$(PYTHON) -m eval.runners.run_qa_eval \
 	    --gold eval/qa_gold/gold_qa_auto_v0.jsonl \
 	    --adapters hybrid \
 	    --run-id "auto_$$(date +%Y%m%d_%H%M%S)"
+
+# Cross-Domain QA — PRD §8.1 (CD-L1~L4 4단계 층화) 전용.
+eval-cross:
+	$(PYTHON) -m eval.runners.run_qa_eval \
+	    --gold eval/qa_gold/gold_qa_cross_v0.jsonl \
+	    --adapters hybrid \
+	    --run-id "cross_$$(date +%Y%m%d_%H%M%S)"
+
+# ─── DoD audit (PRD §10) ─────────────────────────────────────────
+audit-bom-coverage:
+	$(PYTHON) scripts/audit/bom_coverage.py
+
+audit-edge-meta:
+	$(PYTHON) scripts/audit/edge_meta_invariants.py --strict
+
+audit-dod:
+	$(PYTHON) scripts/audit/dod_audit.py
+
+validate-gold-qa:
+	$(PYTHON) scripts/audit/validate_gold_qa.py eval/qa_gold/*.jsonl
+
+# ─── 외부 데이터 소스 (graceful skip — 키 없으면 0 byte) ───────────
+ingest-datagokr-recalls:
+	$(PYTHON) -m autograph.ingestion.datagokr_recalls
+
+ingest-datagokr-inspections:
+	$(PYTHON) -m autograph.ingestion.datagokr_inspections
+
+ingest-car-go-kr:
+	$(PYTHON) -m autograph.ingestion.car_go_kr_recalls
+
+ingest-katri:
+	$(PYTHON) -m autograph.ingestion.katri_tic
+
+ingest-kncap:
+	$(PYTHON) -m autograph.ingestion.kncap
+
+load-datagokr-recalls:
+	$(PYTHON) -m autograph.loaders.load_datagokr_recalls
+
+load-datagokr-inspections:
+	$(PYTHON) -m autograph.loaders.load_datagokr_inspections
+
+load-kncap:
+	$(PYTHON) -m autograph.loaders.load_kncap
+
+load-manufactured-at:
+	$(PYTHON) -m autograph.loaders.load_manufactured_at

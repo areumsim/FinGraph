@@ -53,10 +53,13 @@ def classify_question(question: str) -> QuestionKind:
 
 
 def turn_budget_remaining(state: AgentState) -> float:
-    """이 turn 의 남은 예산 (USD). 0 또는 음수면 중단 신호."""
-    settings = get_settings()
+    """이 turn 의 남은 예산 (USD). 0 또는 음수면 중단 신호.
+
+    도메인별 override 가 있으면 그것을 사용 — auto/cross_domain 분리 추적.
+    """
+    from ..config import turn_budget_for_domain
     used = float(state.get("llm_usage_usd") or 0.0)
-    return float(settings.agent_turn_budget_usd) - used
+    return turn_budget_for_domain(state.get("domain")) - used
 
 
 def turn_budget_exceeded(state: AgentState) -> bool:

@@ -2,27 +2,35 @@
 
 원칙:
 - PG 가 SSOT. Neo4j 는 관계 탐색용 derived view.
-- 모든 관계 엣지에 source_id / source_type / confidence_score / validated_status /
-  snapshot_year 동봉.
-- 데이터가 부족한 관계(부품·공급사·공법)는 절대 생성하지 않거나 candidate 로만.
+- 모든 관계 엣지에 §6.7 의무 메타 동봉 (source_id, source_type, confidence_score,
+  validated_status, snapshot_year, extraction_method).
+- 데이터가 부족한 관계는 절대 생성하지 않거나 confidence < 1.0 candidate 로만.
 
-노드:
-    Manufacturer  : id (== manufacturer_id), name, name_norm, country, wikidata_qid
-    VehicleModel  : id (== model_id), name, name_norm, market, wikidata_qid
-    VehicleVariant: id (== variant_id), model_year, trim, fuel_type, body_class
-    Recall        : id (== recall_id), source, source_recall_no, report_date,
-                    component_text, summary
-    System        : code (예 "ENGINE"), name
-    Component     : id (== component_id), name, system_code
+노드 (라벨 SSOT 는 ontology/auto/entities.yaml):
+    Manufacturer  : {id}    — auto.master_manufacturers.manufacturer_id
+    VehicleModel  : {id}    — auto.master_vehicle_models.model_id
+    VehicleVariant: {id}    — auto.master_vehicle_variants.variant_id
+    Recall        : {id}    — auto.events_recalls.recall_id
+    System        : {code}  — canonical SCREAMING_SNAKE (system_taxonomy.yaml)
+    Module        : {id}    — auto.components.component_id (level=4)
+    Part          : {id}    — auto.components.component_id (level=5)
+    Supplier      : {entity_id} — stringified auto.master_suppliers.supplier_id
 
-관계:
+관계 (관계 타입 SSOT 는 ontology/auto/relations.yaml):
     (Manufacturer)-[:MANUFACTURES]->(VehicleModel)
     (VehicleModel)-[:HAS_VARIANT]->(VehicleVariant)
     (VehicleVariant)-[:AFFECTED_BY]->(Recall)
     (VehicleModel)-[:AFFECTED_BY]->(Recall)              -- variant 매핑 실패 시 fallback
-    (Component)-[:CONTAINED_IN]->(System)
-    (VehicleModel)-[:CONTAINS_COMPONENT]->(Component)    -- candidate 만 (Wikidata 등)
-    (Component)-[:SUPPLIED_BY]->(Supplier)               -- candidate 만
+    (Module)-[:CONTAINED_IN]->(System)
+    (Part)-[:CONTAINED_IN]->(Module)
+
+본 모듈이 적재하지 않는 엣지 (각자 별도 로더):
+    (Recall)-[:RECALL_OF]->(Module|Part)            → load_recall_components.py
+    (Module|Part)-[:SUPPLIED_BY]->(Supplier)         → load_supplier_edges.py
+    (VehicleModel)-[:MANUFACTURED_AT]->(Plant)       → load_seed_standards_plants.py
+    (VehicleVariant)-[:COMPLIES_WITH]->(Standard)    → load_seed_standards_plants.py
+    (VehicleVariant)-[:REPORTED_IN]->(Complaint)     → load_complaints_neo4j.py
+    (VehicleModel)-[:CONTAINS_COMPONENT]->(Component) → load_auto_aihub.py (AI-Hub 매핑)
 
 CLI:
     python -m autograph.loaders.load_auto_neo4j --batch 500
@@ -35,6 +43,9 @@ import logging
 
 from autonexusgraph.db.neo4j import get_driver
 from autonexusgraph.db.postgres import get_connection
+
+from ..ontology import canonical_system_code, load_system_taxonomy
+from ._neo4j_helpers import run_batched
 
 
 log = logging.getLogger(__name__)
@@ -67,9 +78,10 @@ SET   v.name = r.name,
 MERGE (m)-[rel:MANUFACTURES]->(v)
 SET   rel.source_id = r.source,
       rel.source_type = 'pg.auto.master_vehicle_models',
+      rel.extraction_method = 'deterministic',
       rel.confidence_score = r.confidence,
       rel.validated_status = r.validated_status,
-      rel.snapshot_year = r.snapshot_year
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
 """
 
 MERGE_VARIANT = """
@@ -86,9 +98,10 @@ SET   v.model_year = r.model_year,
 MERGE (m)-[rel:HAS_VARIANT]->(v)
 SET   rel.source_id = r.source,
       rel.source_type = 'pg.auto.master_vehicle_variants',
+      rel.extraction_method = 'deterministic',
       rel.confidence_score = r.confidence,
       rel.validated_status = r.validated_status,
-      rel.snapshot_year = r.snapshot_year
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
 """
 
 MERGE_RECALL = """
@@ -105,55 +118,104 @@ SET   rc.source = r.source,
       rc.affected_units = r.affected_units,
       rc.snapshot_year = r.snapshot_year,
       rc.updated_at = datetime()
-WITH rc, r
-FOREACH (_ IN CASE WHEN r.variant_id IS NULL THEN [] ELSE [1] END |
-  MERGE (v:VehicleVariant {id: r.variant_id})
-  MERGE (v)-[rel:AFFECTED_BY]->(rc)
-  SET   rel.source_id = r.source_recall_no,
-        rel.source_type = 'pg.auto.events_recalls',
-        rel.confidence_score = r.confidence,
-        rel.validated_status = r.validated_status,
-        rel.snapshot_year = r.snapshot_year
-)
-FOREACH (_ IN CASE WHEN r.model_id IS NULL OR r.variant_id IS NOT NULL THEN []
-                   ELSE [1] END |
-  MERGE (m:VehicleModel {id: r.model_id})
-  MERGE (m)-[rel:AFFECTED_BY]->(rc)
-  SET   rel.source_id = r.source_recall_no,
-        rel.source_type = 'pg.auto.events_recalls',
-        rel.confidence_score = r.confidence,
-        rel.validated_status = r.validated_status,
-        rel.snapshot_year = r.snapshot_year
-)
 """
 
-MERGE_COMPONENT = """
+# (VehicleVariant)-[:AFFECTED_BY]->(Recall) — variant_id 가 PG 에서 매칭된 경우에만 엣지.
+# OPTIONAL MATCH 로 실제 variant 노드가 있을 때만 연결 — 미매칭 recall 은 다음 fallback 패스로.
+MERGE_RECALL_EDGE_VARIANT = """
 UNWIND $rows AS r
-MERGE (c:Component {id: r.id})
-SET   c.name = r.canonical_name,
-      c.name_norm = r.name_norm,
-      c.system_code = r.system_code,
-      c.wikidata_qid = r.wikidata_qid,
-      c.source = r.source,
-      c.updated_at = datetime()
-WITH c, r
-MERGE (s:System {code: r.system_code})
-MERGE (c)-[rel:CONTAINED_IN]->(s)
+MATCH (rc:Recall {id: r.id})
+WITH rc, r WHERE r.variant_id IS NOT NULL
+OPTIONAL MATCH (v:VehicleVariant {id: r.variant_id})
+WITH rc, r, v WHERE v IS NOT NULL
+MERGE (v)-[rel:AFFECTED_BY]->(rc)
+SET   rel.source_id = r.source_recall_no,
+      rel.source_type = 'pg.auto.events_recalls',
+      rel.extraction_method = 'deterministic',
+      rel.confidence_score = r.confidence,
+      rel.validated_status = r.validated_status,
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
+"""
+
+# (VehicleModel)-[:AFFECTED_BY]->(Recall) — variant 매핑이 실패했을 때의 fallback.
+MERGE_RECALL_EDGE_MODEL_FALLBACK = """
+UNWIND $rows AS r
+MATCH (rc:Recall {id: r.id})
+WITH rc, r WHERE r.variant_id IS NULL AND r.model_id IS NOT NULL
+OPTIONAL MATCH (m:VehicleModel {id: r.model_id})
+WITH rc, r, m WHERE m IS NOT NULL
+MERGE (m)-[rel:AFFECTED_BY]->(rc)
+SET   rel.source_id = r.source_recall_no,
+      rel.source_type = 'pg.auto.events_recalls',
+      rel.extraction_method = 'deterministic',
+      rel.confidence_score = r.confidence,
+      rel.validated_status = r.validated_status,
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
+"""
+
+# Level 3 (System): 노드 + name + description. system_taxonomy 시드로 보강.
+MERGE_SYSTEM = """
+UNWIND $rows AS r
+MERGE (s:System {code: r.code})
+SET   s.name = coalesce(r.name, s.name),
+      s.description = coalesce(r.description, s.description),
+      s.updated_at = datetime()
+"""
+
+# Level 4 (Module): :Module 라벨 + (Module)-[:CONTAINED_IN]->(System).
+MERGE_MODULE = """
+UNWIND $rows AS r
+MERGE (m:Module {id: r.id})
+SET   m.name = r.canonical_name,
+      m.name_norm = r.name_norm,
+      m.system_code = r.system_code,
+      m.wikidata_qid = r.wikidata_qid,
+      m.source = r.source,
+      m.updated_at = datetime()
+WITH m, r
+OPTIONAL MATCH (s:System {code: r.system_code})
+WITH m, r, s WHERE s IS NOT NULL
+MERGE (m)-[rel:CONTAINED_IN]->(s)
 SET   rel.source_id = 'auto.components',
       rel.source_type = 'pg.auto.components',
+      rel.extraction_method = 'deterministic',
       rel.confidence_score = 1.0,
       rel.validated_status = 'verified',
-      rel.snapshot_year = r.snapshot_year
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
 """
 
-# bridge.corp_entity 의 supplier entity → Neo4j Supplier 노드. 관계 (SUPPLIED_BY) 는
-# 어떤 (vehicle, component) 가 어느 supplier 에 의존하는지 Wikidata P176 등으로 알아야
-# 그릴 수 있어 본 loader 에서는 노드만 적재. corp_code 매칭 정보 (lei/business_no/qid)
-# 가 있는 supplier 만 노드로 — 단순 corp_entity row 가 매핑 정보 충분할 때만.
+# Level 5 (Part): :Part 라벨 + parent_component_id 가 있으면 (Part)-[:CONTAINED_IN]->(Module).
+MERGE_PART = """
+UNWIND $rows AS r
+MERGE (p:Part {id: r.id})
+SET   p.name = r.canonical_name,
+      p.name_norm = r.name_norm,
+      p.system_code = r.system_code,
+      p.wikidata_qid = r.wikidata_qid,
+      p.source = r.source,
+      p.updated_at = datetime()
+WITH p, r
+OPTIONAL MATCH (parent:Module {id: r.parent_component_id})
+WITH p, r, parent WHERE parent IS NOT NULL
+MERGE (p)-[rel:CONTAINED_IN]->(parent)
+SET   rel.source_id = 'auto.components',
+      rel.source_type = 'pg.auto.components',
+      rel.extraction_method = 'deterministic',
+      rel.confidence_score = 1.0,
+      rel.validated_status = 'verified',
+      rel.snapshot_year = coalesce(r.snapshot_year, date().year)
+"""
+
+# auto.master_suppliers + bridge.corp_entity 의 supplier 행 → :Supplier 노드.
+# entity_id (stringified supplier_id) 가 유일 키 — neo4j_init 제약과 일치.
+# name_norm / country / wikidata_qid / corp_code 메타도 함께 세팅 (cross-domain bridge 진입점).
 MERGE_SUPPLIER = """
 UNWIND $rows AS r
-MERGE (sup:Supplier {wikidata_qid: r.wikidata_qid})
+MERGE (sup:Supplier {entity_id: r.entity_id})
 SET   sup.name = r.name,
+      sup.name_norm = r.name_norm,
+      sup.country = r.country,
+      sup.wikidata_qid = r.wikidata_qid,
       sup.corp_code = r.corp_code,
       sup.reviewed_status = r.reviewed_status,
       sup.confidence_score = r.confidence_score,
@@ -224,66 +286,91 @@ def _fetch_recalls(cur) -> list[dict]:
     return rows
 
 
-def _fetch_components(cur) -> list[dict]:
+def _fetch_systems_from_taxonomy() -> list[dict]:
+    """ontology/auto/system_taxonomy.yaml → :System seed rows."""
+    return [
+        {"code": code, "name": row["name"], "description": row.get("description")}
+        for code, row in load_system_taxonomy().items()
+    ]
+
+
+def _fetch_components_by_level(cur, level: int) -> list[dict]:
+    """auto.components WHERE level=? → Module(4) / Part(5) dict 리스트.
+
+    system_code 는 canonical_system_code() 로 정규화 (AI-Hub 'powertrain' → 'POWERTRAIN').
+    """
     cur.execute("""
         SELECT component_id, canonical_name, name_norm, system_code,
-               wikidata_qid, source
+               wikidata_qid, source, snapshot_year, parent_component_id
           FROM auto.components
-    """)
-    return [{
-        "id": r[0], "canonical_name": r[1], "name_norm": r[2],
-        "system_code": r[3], "wikidata_qid": r[4], "source": r[5],
-        "snapshot_year": None,
-    } for r in cur.fetchall()]
+         WHERE level = %s
+    """, (level,))
+    rows: list[dict] = []
+    for r in cur.fetchall():
+        rows.append({
+            "id": r[0], "canonical_name": r[1], "name_norm": r[2],
+            "system_code": canonical_system_code(r[3]),
+            "wikidata_qid": r[4], "source": r[5],
+            "snapshot_year": r[6],
+            "parent_component_id": r[7],
+        })
+    return rows
 
 
 def _fetch_suppliers(cur) -> list[dict]:
-    """bridge.corp_entity 의 entity_type='supplier' row 를 Neo4j Supplier 노드용 dict 로."""
+    """auto.master_suppliers + bridge.corp_entity 조인 → :Supplier 노드용 dict.
+
+    entity_id = stringified supplier_id (SSOT — bridge.corp_entity 와 일치).
+    corp_code 매핑이 있는 row 도 함께 (Cross-Domain Bridge 진입점).
+    """
     cur.execute("""
-        SELECT entity_id AS wikidata_qid, name, corp_code,
-               reviewed_status, confidence_score, match_method
-          FROM bridge.corp_entity
-         WHERE entity_type = 'supplier'
-           AND reviewed_status <> 'rejected'
+        SELECT s.supplier_id, s.name, s.name_norm, s.country, s.wikidata_qid,
+               be.corp_code, be.reviewed_status, be.confidence_score, be.match_method
+          FROM auto.master_suppliers s
+          LEFT JOIN bridge.corp_entity be
+            ON be.entity_type = 'supplier'
+           AND be.entity_id   = s.supplier_id::text
+         WHERE COALESCE(be.reviewed_status, 'candidate') <> 'rejected'
     """)
     return [{
-        "wikidata_qid": r[0], "name": r[1], "corp_code": r[2],
-        "reviewed_status": r[3], "confidence_score": float(r[4]),
-        "match_method": r[5],
+        "entity_id": str(r[0]), "name": r[1], "name_norm": r[2],
+        "country": r[3], "wikidata_qid": r[4],
+        "corp_code": r[5],
+        "reviewed_status": r[6] or "candidate",
+        "confidence_score": float(r[7]) if r[7] is not None else 0.80,
+        "match_method": r[8],
     } for r in cur.fetchall()]
-
-
-def _run_batched(session, cypher: str, rows: list[dict], batch: int) -> int:
-    n = 0
-    for i in range(0, len(rows), batch):
-        chunk = rows[i:i + batch]
-        if not chunk:
-            continue
-        session.run(cypher, rows=chunk)
-        n += len(chunk)
-    return n
 
 
 def load_all(batch: int = 500) -> dict:
     out: dict = {}
     pg = get_connection()
     with pg.cursor() as cur:
-        mfr = _fetch_mfr(cur)
-        models = _fetch_models(cur)
+        mfr      = _fetch_mfr(cur)
+        models   = _fetch_models(cur)
         variants = _fetch_variants(cur)
-        recalls = _fetch_recalls(cur)
-        components = _fetch_components(cur)
+        recalls  = _fetch_recalls(cur)
+        modules  = _fetch_components_by_level(cur, 4)
+        parts    = _fetch_components_by_level(cur, 5)
         suppliers = _fetch_suppliers(cur)
     pg.commit()
 
+    systems = _fetch_systems_from_taxonomy()
+
     driver = get_driver()
     with driver.session() as session:
-        out["manufacturers"] = _run_batched(session, MERGE_MFR, mfr, batch)
-        out["models"]        = _run_batched(session, MERGE_MODEL, models, batch)
-        out["variants"]      = _run_batched(session, MERGE_VARIANT, variants, batch)
-        out["recalls"]       = _run_batched(session, MERGE_RECALL, recalls, batch)
-        out["components"]    = _run_batched(session, MERGE_COMPONENT, components, batch)
-        out["suppliers"]     = _run_batched(session, MERGE_SUPPLIER, suppliers, batch)
+        out["manufacturers"] = run_batched(session, MERGE_MFR, mfr, batch=batch)
+        out["models"]        = run_batched(session, MERGE_MODEL, models, batch=batch)
+        out["variants"]      = run_batched(session, MERGE_VARIANT, variants, batch=batch)
+        # Recall: 노드 먼저, 그 다음 AFFECTED_BY 엣지 두 패스 (variant 우선, model fallback).
+        out["recalls"]       = run_batched(session, MERGE_RECALL, recalls, batch=batch)
+        run_batched(session, MERGE_RECALL_EDGE_VARIANT, recalls, batch=batch)
+        run_batched(session, MERGE_RECALL_EDGE_MODEL_FALLBACK, recalls, batch=batch)
+        # BOM 계층: System → Module → Part (참조 무결성 보장 순서).
+        out["systems"]       = run_batched(session, MERGE_SYSTEM, systems, batch=batch)
+        out["modules"]       = run_batched(session, MERGE_MODULE, modules, batch=batch)
+        out["parts"]         = run_batched(session, MERGE_PART, parts, batch=batch)
+        out["suppliers"]     = run_batched(session, MERGE_SUPPLIER, suppliers, batch=batch)
 
     log.info("[neo4j] loaded %s", out)
     return out

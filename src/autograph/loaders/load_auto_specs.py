@@ -60,6 +60,40 @@ _SPEC_MAP: dict[str, tuple[str, str, float]] = {
 }
 
 
+# canspec Model 문자열 → (body_class, drive_type).
+# 예: 'IONIQ 6 4DR SEDAN'              → ('Sedan', None)
+#     'PALISADE 4DR SUV AWD'           → ('SUV', 'AWD')
+#     'SANTA FE 4DR SUV FWD HEV'       → ('SUV', 'FWD')
+#     'KONA EV 4DR SUV AWD'            → ('SUV', 'AWD')
+#     'ELANTRA 4DR HATCHBACK FWD'      → ('Hatchback', 'FWD')
+_BODY_KEYWORDS = (
+    ("SUV", "SUV"),
+    ("HATCHBACK", "Hatchback"),
+    ("WAGON", "Wagon"),
+    ("COUPE", "Coupe"),
+    ("CONVERTIBLE", "Convertible"),
+    ("PICKUP", "Pickup"),
+    ("VAN", "Van"),
+    ("SEDAN", "Sedan"),
+    ("TRUCK", "Truck"),
+)
+_DRIVE_KEYWORDS = ("AWD", "4WD", "FWD", "RWD")
+
+
+def parse_canspec_model_str(model_raw: str) -> tuple[str | None, str | None]:
+    """canspec 의 Model 문자열에서 (body_class, drive_type) 추출.
+
+    raw 값은 "<MODEL> [NDR] <BODY> [DRIVE] [POWERTRAIN]" 형태.
+    매칭 실패 시 (None, None).
+    """
+    if not model_raw:
+        return None, None
+    up = model_raw.upper()
+    body = next((bv for kw, bv in _BODY_KEYWORDS if kw in up), None)
+    drive = next((kw for kw in _DRIVE_KEYWORDS if kw in up), None)
+    return body, drive
+
+
 @dataclass
 class LoadStats:
     files_seen: int = 0
@@ -172,6 +206,19 @@ def load_specs(*, make_filter: str | None = None,
                         stats.variants_unmatched += 1
                         cur.execute("RELEASE SAVEPOINT sp_specs")
                         continue
+
+                    # canspec Model 문자열에서 body_class / drive_type 보강 —
+                    # vPIC GetModelsForMakeYear 는 trim/body/drive 를 반환하지 않으므로
+                    # canspec 의 'IONIQ 6 4DR SEDAN' / 'PALISADE 4DR SUV AWD' 등에서 추출.
+                    body_class, drive_type = parse_canspec_model_str(model_raw)
+                    if body_class or drive_type:
+                        cur.execute("""
+                            UPDATE auto.master_vehicle_variants
+                               SET body_class = COALESCE(body_class, %s),
+                                   drive_type = COALESCE(drive_type, %s)
+                             WHERE variant_id = %s
+                               AND (body_class IS NULL OR drive_type IS NULL)
+                        """, (body_class, drive_type, variant_id))
 
                     # 기존 동일 source 측정값 모두 삭제 후 재삽입 (멱등).
                     cur.execute("""

@@ -1,0 +1,125 @@
+# 생산공장 시드 — :Plant 노드의 SSOT.
+#
+# 본 시드는 한국 OEM + 주요 글로벌 공장 ~20 개. manufacturer_id 매핑이 비어있을 수 있는데,
+# 로더가 auto.master_manufacturers.name_norm 매칭으로 채운다.
+# wikidata_qid 는 Wikipedia/Wikidata 검증 시 활용.
+
+version: 1
+last_updated: 2026-05-28
+
+plants:
+
+  # ── 현대자동차 ─────────────────────────────────────────────
+  - code: HYU_ULSAN
+    name: 현대자동차 울산공장
+    manufacturer_name: HYUNDAI
+    country: KR
+    city: Ulsan
+    wikidata_qid: Q5928430
+
+  - code: HYU_ASAN
+    name: 현대자동차 아산공장
+    manufacturer_name: HYUNDAI
+    country: KR
+    city: Asan
+
+  - code: HYU_JEONJU
+    name: 현대자동차 전주공장
+    manufacturer_name: HYUNDAI
+    country: KR
+    city: Jeonju
+
+  - code: HYU_MONTGOMERY
+    name: Hyundai Motor Manufacturing Alabama
+    manufacturer_name: HYUNDAI
+    country: US
+    city: Montgomery
+    wikidata_qid: Q5928433
+
+  # ── 기아 ──────────────────────────────────────────────────
+  - code: KIA_HWASEONG
+    name: 기아 화성공장
+    manufacturer_name: KIA
+    country: KR
+    city: Hwaseong
+
+  - code: KIA_GWANGJU
+    name: 기아 광주공장
+    manufacturer_name: KIA
+    country: KR
+    city: Gwangju
+
+  - code: KIA_WEST_POINT
+    name: Kia Motors Manufacturing Georgia
+    manufacturer_name: KIA
+    country: US
+    city: West Point
+
+  # ── 제네시스 / KGM (구 쌍용) ──
+  - code: KGM_PYEONGTAEK
+    name: KG모빌리티 평택공장
+    manufacturer_name: KG MOBILITY
+    country: KR
+    city: Pyeongtaek
+
+  - code: KGM_CHANGWON
+    name: KG모빌리티 창원공장
+    manufacturer_name: KG MOBILITY
+    country: KR
+    city: Changwon
+
+  # ── 르노코리아 / GM 한국 ──
+  - code: RNK_BUSAN
+    name: 르노코리아 부산공장
+    manufacturer_name: RENAULT KOREA
+    country: KR
+    city: Busan
+
+  - code: GMK_BUPYEONG
+    name: GM Korea 부평공장
+    manufacturer_name: GM
+    country: KR
+    city: Incheon
+
+  # ── 글로벌 (주요 OEM 한 곳씩) ──
+  - code: TOY_TAKAOKA
+    name: Toyota Takaoka Plant
+    manufacturer_name: TOYOTA
+    country: JP
+    city: Toyota City
+
+  - code: BMW_DINGOLFING
+    name: BMW Werk Dingolfing
+    manufacturer_name: BMW
+    country: DE
+    city: Dingolfing
+
+  - code: VW_WOLFSBURG
+    name: Volkswagen Wolfsburg Plant
+    manufacturer_name: VOLKSWAGEN
+    country: DE
+    city: Wolfsburg
+
+  - code: TES_FREMONT
+    name: Tesla Fremont Factory
+    manufacturer_name: TESLA
+    country: US
+    city: Fremont
+
+  - code: TES_SHANGHAI
+    name: Tesla Gigafactory Shanghai
+    manufacturer_name: TESLA
+    country: CN
+    city: Shanghai
+
+  - code: FORD_DEARBORN
+    name: Ford Dearborn Truck Plant
+    manufacturer_name: FORD
+    country: US
+    city: Dearborn
+
+  - code: GM_DETROIT
+    name: GM Detroit-Hamtramck Assembly
+    manufacturer_name: GM
+    country: US
+    city: Detroit

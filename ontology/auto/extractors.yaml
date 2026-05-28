@@ -1,0 +1,260 @@
+# AutoGraph 추출기 카탈로그 — 어떤 source 가 어떤 entity/relation 을 만드나.
+#
+# 각 extractor 는 하나의 source 를 하나 이상의 entity/relation 으로 변환.
+# Schema-aware 보장: 출력은 ontology/auto/entities.yaml / relations.yaml 의 타입에만 한정.
+
+version: 1
+last_updated: 2026-05-28
+
+extractors:
+
+  # ── P2 (정형 직매핑) ───────────────────────────────────────────
+  nhtsa_vpic:
+    pass: P2
+    source:
+      type: api
+      endpoint: /vehicles/GetAllMakes, /vehicles/GetModelsForMakeYear
+    method: deterministic
+    out:
+      entities: [Manufacturer, VehicleModel, VehicleVariant]
+      relations: [MANUFACTURES, HAS_VARIANT]
+    impl:
+      pg:    src/autograph/loaders/load_auto_pg.py::load_vpic
+      graph: src/autograph/loaders/load_auto_neo4j.py
+    idempotency: UPSERT on PG natural keys → MERGE on Neo4j id
+    status: implemented
+
+  nhtsa_canspec:
+    pass: P2
+    source:
+      type: api
+      endpoint: /vehicles/GetCanadianVehicleSpecifications
+    method: deterministic
+    out:
+      entities: [VehicleVariant]    # 제원 측정값 강화
+      relations: []                  # spec_measurements 는 PG only
+    impl:
+      pg: src/autograph/loaders/load_auto_specs.py
+    status: implemented
+
+  nhtsa_recalls:
+    pass: P2
+    source:
+      type: api
+      endpoint: /Recalls/vehicle/modelyear/{year}/make/{make}/model/{model}
+    method: deterministic
+    out:
+      entities: [Recall, VehicleVariant]
+      relations: [AFFECTED_BY]
+    impl:
+      pg:    src/autograph/loaders/load_auto_pg.py::load_recalls
+      graph: src/autograph/loaders/load_auto_neo4j.py
+    status: implemented
+
+  car_go_kr_recalls:
+    pass: P2
+    source:
+      type: api
+      endpoint: car.go.kr (KOTSA)
+    method: deterministic
+    out:
+      entities: [Recall]
+      relations: [AFFECTED_BY]
+    impl:
+      pg: src/autograph/loaders/load_auto_kotsa.py
+    status: implemented
+
+  nhtsa_complaints:
+    pass: P2
+    source:
+      type: api
+      endpoint: /Complaints/...
+    method: deterministic
+    out:
+      entities: [Complaint]
+      relations: [REPORTED_IN]
+    impl:
+      pg:    src/autograph/loaders/load_auto_pg.py::load_complaints
+      graph: src/autograph/loaders/load_complaints_neo4j.py
+    status: implemented
+
+  wikidata_auto:
+    pass: P2
+    source:
+      type: sparql
+      endpoint: https://query.wikidata.org/sparql
+    method: deterministic
+    out:
+      entities: [Manufacturer, VehicleModel, Supplier]
+      relations: []                  # 노드 보강 위주 — 엣지는 supplier_edges 에서
+    impl:
+      pg: src/autograph/loaders/load_auto_pg.py::load_wikidata
+    status: implemented
+
+  aihub_71347_578:
+    pass: P2
+    source:
+      type: dataset
+      ref: AI Hub 71347 (자율주행 고장진단), 578 (부품 품질 검사)
+    method: deterministic_aggregation
+    out:
+      entities: [Module, System]
+      relations: [CONTAINS_SYSTEM, CONTAINED_IN]
+    impl:
+      pg:    src/autograph/loaders/load_auto_aihub.py
+      graph: src/autograph/loaders/load_auto_aihub.py
+    status: implemented
+
+  system_taxonomy_seed:
+    pass: P2
+    source:
+      type: yaml
+      ref: ontology/auto/system_taxonomy.yaml
+    method: deterministic
+    out:
+      entities: [System]
+      relations: []
+    impl: src/autograph/loaders/load_seed_standards_plants.py
+    status: implemented
+
+  recall_component_match:        # Recall.component_text → Component/Module/Part
+    pass: P2
+    source:
+      type: pg
+      tables: [auto.events_recalls, auto.components]
+    method: deterministic           # 토큰/별칭 매칭 — LLM 0
+    out:
+      entities: []                  # 새 entity 안 만듦
+      relations: [RECALL_OF]
+    impl: src/autograph/loaders/load_recall_components.py
+    confidence_gate:
+      exact:    0.85
+      token:    0.70
+      no_match: staging (P3 LLM 으로 회부)
+    status: new_in_this_pr
+
+  supplier_edges_wikidata:        # Wikidata P176 → (Module/Part)-[:SUPPLIED_BY]->(Supplier)
+    pass: P2
+    source:
+      type: api
+      ref: Wikidata P176 (manufacturer)
+    method: deterministic
+    out:
+      entities: []
+      relations: [SUPPLIED_BY]
+    impl: src/autograph/loaders/load_supplier_edges.py
+    status: new_in_this_pr
+
+  standards_plants_seed:
+    pass: P2
+    source:
+      type: yaml
+      refs:
+        - ontology/auto/standards.yaml
+        - ontology/auto/plants.yaml
+    method: deterministic
+    out:
+      entities: [Standard, Plant]
+      relations: [OWNS_PLANT]
+    impl: src/autograph/loaders/load_seed_standards_plants.py
+    status: implemented
+    notes: |
+      Standard / Plant 노드를 시드. (:Manufacturer)-[:OWNS_PLANT]->(:Plant) 만 본 모듈
+      이 만든다. 구체 (:VehicleModel)-[:MANUFACTURED_AT]->(:Plant) / (:VehicleVariant)
+      -[:COMPLIES_WITH]->(:Standard) 매핑은 별도 데이터 수집 후 PR.
+
+  nhtsa_safety_ratings:
+    pass: P2
+    source:
+      type: api
+      endpoint: /SafetyRatings/modelyear/{year}/make/{make}/model/{model}
+    method: deterministic
+    out:
+      entities: [VehicleVariant]       # 점수는 spec_measurements 에, 엣지는 SAFETY_RATED_BY
+      relations: [SAFETY_RATED_BY]
+    target:
+      pg_table: auto.spec_measurements    # safety.ncap.* / safety.feature.*
+      neo4j_labels: [VehicleVariant, Standard]
+    confidence: 0.95                       # PRD §3.5 A grade
+    impl:
+      ingest: src/autograph/ingestion/nhtsa_safety_ratings.py
+      load:   src/autograph/loaders/load_auto_safety.py
+    status: implemented
+
+  derive_contains_system:                  # graph-internal derivation, no external source
+    pass: P2
+    source:
+      type: graph
+      ref: (VehicleModel)-[:CONTAINS_COMPONENT]->(Module|Part)-[:CONTAINED_IN*1..2]->(System)
+    method: deterministic
+    out:
+      entities: []
+      relations: [CONTAINS_SYSTEM]
+    impl: src/autograph/loaders/derive_contains_system.py
+    status: implemented
+    notes: |
+      외부 데이터 없이 그래프 내부에서 유도. CONTAINS_COMPONENT 와 CONTAINED_IN 적재
+      이후에 실행. main_hop 1-hop 쿼리 단축이 목적.
+
+  # ── P3 (LLM — vec.chunks 본문 기반) ─────────────────────────────
+  auto_llm_relations:
+    pass: P3
+    source:
+      type: pg
+      table: vec.chunks
+      filter: |
+        manufacturer_id IS NOT NULL
+        AND source IN ('nhtsa_recall','nhtsa_complaint','wikipedia_auto')
+    method: llm
+    llm:
+      role: research
+      strategy: schema_aware
+      prompt: src/autograph/extractors/prompts/relation_extract_auto.yaml
+    out:
+      entities: []                    # 본 PR 에서 entity 생성 안 함 — relation only
+      relations: [SUPPLIED_BY, RECALL_OF]   # 1차 활성. (deferred: COMPETES_WITH, MANUFACTURED_AT, CONTAINS_MODULE, CONTAINS_PART)
+    target:
+      pg_staging: auto.staging_relations
+    confidence_gate:
+      auto_accept:  ">= 0.80"
+      needs_review: "0.65 <= conf < 0.80"
+      drop:         "< 0.65"
+    impl: src/autograph/extractors/auto_relation_extractor.py
+    status: new_in_this_pr
+
+  # ── P4 (cross-validate) ───────────────────────────────────────
+  cross_validate:
+    pass: P4
+    source: P3 산출 (auto.staging_relations) + P2 결과
+    method: rule
+    logic: |
+      - SUPPLIED_BY: Wikidata P176 와 일치 → boost + validated. 미일치 + ≥0.8 → candidate. <0.65 → reject_memory.
+      - RECALL_OF:   determ exact 매칭 + LLM 일치 → validated; LLM 만 + 외부 supplier 미존재 → review.
+      - 충돌 (예: LLM MANUFACTURES vs NHTSA vPIC): deterministic 우선 → reject (PRD §3.5).
+    impl: src/autograph/extractors/cross_validate.py
+    status: new_in_this_pr
+
+# ── 현재 상태 요약 ─────────────────────────────────────────────
+status_summary:
+  implemented:
+    - nhtsa_vpic
+    - nhtsa_canspec
+    - nhtsa_recalls
+    - car_go_kr_recalls
+    - nhtsa_complaints
+    - nhtsa_safety_ratings
+    - wikidata_auto
+    - aihub_71347_578
+    - system_taxonomy_seed
+    - recall_component_match
+    - supplier_edges_wikidata
+    - standards_plants_seed
+    - derive_contains_system
+    - auto_llm_relations            # P3 SUPPLIED_BY / RECALL_OF
+    - cross_validate
+  deferred:
+    # 다음 PR 영역 — 본 ontology / extractor 골격은 그대로 재사용.
+    - llm_relations_phase2          # COMPETES_WITH / MANUFACTURED_AT / CONTAINS_MODULE / CONTAINS_PART
+    - wikidata_p176_supplied_by     # SPARQL 자동화 (manual seed 가 1차 커버 중)
+    - model_to_plant_mapping        # 구체 (:VehicleModel)-[:MANUFACTURED_AT]->(:Plant)
+    - knkap_katri_compliance        # 한국 KNCAP/KATRI 형식승인 → COMPLIES_WITH

@@ -1,8 +1,16 @@
-# AutoGraph — 자동차 도메인 GraphRAG (PRD v2.0)
+# AutoGraph — 자동차 도메인 GraphRAG (PRD v2.1)
 
 AutoNexusGraph(금융) 코어 위에 **자동차 제품·부품·리콜·공급망 GraphRAG**를 얹은 추가 도메인.
 LangGraph multi-agent, PG/Neo4j/pgvector, cost/number/cypher guard 등 핵심 인프라는 그대로
 재사용한다. 새 코드는 `src/autograph/` 별도 패키지로 격리.
+
+> **본 패치 (2026-05-28) 요약 — §7 참조**
+> ① ontology/auto/*.yaml SSOT 도입 → Neo4j 제약·LLM 프롬프트·검증기 동시 구동.
+> ② BOM 라벨 정상화: `:Component` → `:Module`(level=4) / `:Part`(level=5) 분리,
+>    `:System` 코드 SCREAMING_SNAKE 통일, `:Supplier.entity_id` 식별 일관성 복구.
+> ③ 새 deterministic 엣지: `RECALL_OF` (component_text 정규화 매칭) + `SUPPLIED_BY` (manual seed).
+> ④ LLM P3 + P4 cross-validate 신설 — auto.staging_relations 경유, confidence-gate 적재.
+> ⑤ §0 12 개 버그(:Supplier 식별 / ghost MERGE / snapshot_year NULL / 라벨 컨벤션 충돌 / …) 해소.
 
 ## 1. 구조
 
@@ -250,12 +258,28 @@ make ingest-auto-all
 
 raw 경로: `data/raw/auto/{nhtsa_vpic,nhtsa_recalls,nhtsa_complaints,wikidata}/`
 
-### 4.3 Loader (PG → Neo4j → bridge → 청크)
+### 4.3 Loader (PG → Neo4j → bridge → seed/supplier/recall→comp → 청크)
 
 ```bash
 make load-auto-all
-# = load-auto-pg → load-auto-neo4j → load-auto-bridge → build-chunks-auto
+# 의존 순서:
+#   neo4j-init-auto                  (CONSTRAINT/INDEX — ontology SSOT)
+#   load-auto-pg                     (raw → auto.* PG)
+#   load-auto-specs                  (canspec → spec_measurements + body/drive 보강)
+#   load-auto-neo4j                  (PG → Manufacturer/Model/Variant/Recall/System/Module/Part/Supplier 노드 + 핵심 엣지)
+#   load-auto-bridge                 (bridge.corp_entity — QID/LEI/biz/name 매칭)
+#   load-auto-seed-standards-plants  (:Standard + :Plant + OWNS_PLANT — load-auto-safety 의 선행 조건)
+#   load-auto-safety                 (NHTSA SafetyRatings → spec_measurements.safety.* + SAFETY_RATED_BY)
+#   load-auto-aihub                  (AI Hub → :Module + CONTAINS_COMPONENT)
+#   load-auto-supplier-edges         (supplier_seed.yaml → :SUPPLIED_BY)
+#   load-auto-complaints-neo4j       (:Complaint + REPORTED_IN)
+#   load-auto-recall-components      (events_recalls.component_text → :RECALL_OF)
+#   derive-auto-contains-system      ((VehicleModel)-[:CONTAINS_SYSTEM]->(System) 1-hop 유도)
+#   build-chunks-auto                (recall/complaint → vec.chunks)
 ```
+
+상세 절차는 §7.5 검증 가이드 참조. P3 LLM + P4 cross-validate 는 본 타겟에 포함되지 않으며
+별도 명시 호출 (`make extract-validate-auto`) — LLM 비용 발생.
 
 ### 4.4 Tool 단위 확인
 
@@ -294,31 +318,39 @@ make eval-auto
 # eval/reports/auto_<timestamp>/summary.md 확인
 ```
 
-## 5. 알려진 제약 / TODO
+## 5. 알려진 제약 / TODO  (2026-05-28 본 패치 기준 갱신)
 
-스키마는 정의돼 있지만 **MVP 적재 경로가 없는 테이블** (PRD post-MVP 항목):
+본 패치로 **해결된** 항목 (§7 상세):
 
-- `auto.spec_measurements` — `load_auto_pg.py` 가 의도적으로 비어 있음 (vPIC variants 의 unit·key 매핑 후속). 결과적으로 `get_spec / compare_vehicles / get_safety_rating` 은 현재 모두 빈 결과 반환. 에이전트가 spec 질문을 plan 해도 비어있는 응답.
-- `auto.components` — schema (`07_autograph.sql:124`) 정의는 있되 loader 없음. `list_components`, `get_suppliers_of_component`, `get_vehicles_using_component` 등 그래프 쿼리도 자연히 빈 결과. 공개 BOM 데이터 부재로 post-MVP.
-- supplier 관계 — `wikidata_auto.py --kind suppliers` 를 명시적으로 호출해야 `data/raw/auto/wikidata/suppliers.jsonl` 가 생기고 `load_bridge` 가 후보 적재. 기본 `make ingest-auto-all` 은 manufacturers 만 받음.
+- ~~`auto.components` loader 없음~~ → AI Hub 71347/578 + manual supplier_seed 가 채움. `list_modules_by_*` / `get_suppliers_of_component` / `get_vehicles_using_supplier` 결과 반환.
+- ~~supplier 관계 자동 적재 부재~~ → `ontology/auto/supplier_seed.yaml` (19 공급사 × 46 매핑) 이 `(Module|Part)-[:SUPPLIED_BY]->(Supplier)` 결정적 엣지를 생성. confidence 0.90~0.95.
+- ~~Wikidata supplier 의 entity_id 식별 불일관~~ → `auto.master_suppliers.supplier_id` SSOT 도입, `bridge.corp_entity.entity_id` 도 stringified supplier_id 로 정렬.
+- ~~`load_recalls / load_complaints` N+1~~ → single LEFT JOIN 으로 통합 완료 (Phase 5 커밋).
+- ~~`nhtsa_*` 3종 `_http_get` 중복~~ → `_common_nhtsa.py` 추출 완료.
 
-데이터 소스 외부 의존 (코드는 있되 키/수동 단계 필요):
+2026-05-28 (Phase B) 패치로 **인터페이스까지 깔린 외부 의존** (키만 채우면 즉시 활성):
 
-- **NCAP / IIHS 안전 등급** — 별도 수집 미구현. `spec_measurements` 에 `safety.*` 키로 들어
-  오면 `get_safety_rating()` 이 반환. (MVP 에선 비어 있을 수 있음)
-- **한국 자동차리콜센터 (car.go.kr)** — 공식 OpenAPI 미정. `data/raw/auto/car_go_kr/*.csv`
-  수동 다운로드 시 `python -m autograph.ingestion.car_go_kr_recalls` 가 normalize.
-- **KATRI / KNCAP** — 인증키 미발급. 키 없을 시 graceful skip.
-- **Level 5~6 BOM (소재·공법)** — 공개 데이터 거의 없음. 본 MVP 는 System → Component 까지.
-- **Wikidata supplier 후보** — `bridge.corp_entity` 에 `confidence < 1.0` candidate 만 적재.
-  사람 검토 후 `reviewed_status='reviewed'` 로 승급해야 운영용 그래프에 사용.
-- **임베딩** — 자동차 청크의 embedding 채우기는 finance 와 동일하게 별도 `embed-chunks`
-  과정 필요 (BGE-M3 서버).
+- **data.go.kr 15089863 한국 리콜** — `ingestion.datagokr_recalls` + `loaders.load_datagokr_recalls`.
+  `DATA_GO_KR_API_KEY` 미설정 시 graceful skip.
+- **data.go.kr 15155857 수리검사** — `ingestion.datagokr_inspections` + `loaders.load_datagokr_inspections`.
+  CSV 수동 다운 후 normalize → `auto.events_inspections` (`infra/postgres/init/12_autograph_inspections.sql`).
+- **car.go.kr** — `ingestion.car_go_kr_recalls` 가 CSV 파서 제공. 공식 API 미정.
+- **KATRI / bigdata-tic.kr** — `ingestion.katri_tic` OAuth client_credentials.
+  `BIGDATA_TIC_CLIENT_ID/SECRET` 미설정 시 skip.
+- **KNCAP** — `ingestion.kncap` + `loaders.load_kncap`. raw 자료 부재 시 skip.
+  적재 시 `spec_measurements.safety.kncap.*` + `(:VehicleVariant)-[:SAFETY_RATED_BY]->(:Standard {code:'KNCAP'})`.
 
-향후 개선 (성능):
+여전히 외부 채널 의존 (수집 약관/지정 채널):
 
-- `load_recalls / load_complaints` 가 row 마다 manufacturer/model/variant 3 단 SELECT 를 수행 (N+1). 대량 적재 시 single LEFT JOIN 로 통합 권장.
-- `nhtsa_vpic/recalls/complaints` 의 `_http_get` 이 3회 거의 동일 — `_common_nhtsa.py` 로 합칠 만함.
+- **NCAP / IIHS / Euro NCAP** — 별도 수집 미구현. NHTSA NCAP 만 구현됨.
+- **Level 5(Part)는 부분 커버** — Module 은 AI Hub / supplier_seed 기반으로 다수 등록되지만,
+  Part 은 ontology 및 MERGE 경로만 준비. 실데이터는 LLM P3 의 RECALL_OF 추출에서 자연 발생.
+- **Level 6 (Material/Process)** — PRD 명시적 non-goal.
+- **Wikidata P176 자동 SUPPLIED_BY** — `loaders.load_wikidata_part_supplies` 가 staging 까지
+  적재. P4 cross-validate 가 Neo4j 로 promote (manual seed 와 병행).
+- **MANUFACTURED_AT (모델↔공장 구체)** — `ontology/auto/manufactured_at_seed.yaml` 46 매핑
+  + `loaders.load_manufactured_at`. 한국 OEM 12 모델 + Tesla/BMW/VW/Toyota 등 글로벌 대표.
+- **임베딩** — 자동차 청크의 embedding 백필은 동일하게 별도 `embed-chunks` 필요.
 
 ## 6. 회귀 안전
 
@@ -328,3 +360,157 @@ make eval-auto
   영향 없음 (이미 NOT NULL 로 채워져 있음).
 - `cypher_templates_auto.AUTO_TEMPLATES` 키는 `auto_` 접두사로 finance 키와 충돌 안 함.
   병합은 `src/autograph/tools/__init__.py` import 시 1회 실행.
+- `autonexusgraph/extractors/base.py` / `engine.py` 의 finance P3 파이프라인 — 본 패치는 어떤 코드도
+  옮기지 않고 *import* 만 한다. finance 측 P3 / P4 동작은 그대로.
+- 기존 testsuite 310 개 모두 그린 — `pytest -q` (unit). 본 패치가 추가한 `tests/autograph/*` 52 개도 통과.
+- 통합 테스트(`pytest -m integration`)는 마커가 부여된 케이스가 코드베이스에 없어 0개 실행 — 본 패치도 마커 작성 안 함 (실제 Neo4j/PG 인프라가 필요한 검증은 §7.5 verification 절차로 수동 수행).
+
+---
+
+## 7. 본 패치 변경 사항 상세 (2026-05-28)
+
+### 7.1 Ontology SSOT — `ontology/auto/*.yaml`
+
+```
+ontology/
+├── entities.yaml         # (변경 없음) finance — autonexusgraph 가 SSOT 로 사용
+├── relations.yaml        # (변경 없음) finance
+├── extractors.yaml       # (변경 없음) finance
+└── auto/                 # ⭐ 신규 — autograph SSOT
+    ├── entities.yaml         # Manufacturer/VehicleModel/Variant/System/Module/Part/Supplier/Recall/Complaint/Standard/Plant (11)
+    ├── relations.yaml        # MANUFACTURES/HAS_VARIANT/CONTAINS_SYSTEM/CONTAINS_COMPONENT/CONTAINED_IN/SUPPLIED_BY/AFFECTED_BY/RECALL_OF/REPORTED_IN/COMPLIES_WITH/SAFETY_RATED_BY/MANUFACTURED_AT/OWNS_PLANT/COMPETES_WITH (14)
+    ├── extractors.yaml       # 13 추출기 카탈로그 (P2/P3/P4)
+    ├── system_taxonomy.yaml  # 19 시스템 코드 + alias_codes (AI Hub 'powertrain' → 'POWERTRAIN')
+    ├── standards.yaml        # 22 표준 (FMVSS/ECE/KMVSS/NCAP/UN R155/ISO 26262/…)
+    ├── plants.yaml           # 18 공장 (한국 OEM + 글로벌)
+    └── supplier_seed.yaml    # 19 공급사 × 46 매핑 (manual A-grade)
+```
+
+`src/autograph/ontology.py` 가 단일 로더. **변경 충격 점:**
+- `neo4j_init.py` 의 라벨/key 리스트가 더 이상 하드코딩이 아님 (ontology 가 SSOT).
+- LLM 프롬프트의 entity/relation 표는 `render_*_for_prompt()` 로 런타임 주입.
+- finance `ontology/*.yaml` 은 손대지 않음 — autonexusgraph 코드가 그대로 사용.
+
+### 7.2 BOM 라벨 정상화
+
+| Before | After |
+|---|---|
+| `:Component {id}` (모든 부품, level 미분리) | `:System {code}` (L3) + `:Module {id}` (L4) + `:Part {id}` (L5) |
+| `:Component {component_id}` (AI Hub) ↔ `:Component {id}` (neo4j_init) — 키 불일치 → 중복 노드 | `:Module {id}` 단일 키 — 제약과 일치 |
+| `auto.components` 단일 level (= 분리 없음) | `level SMALLINT NOT NULL DEFAULT 4` + `parent_component_id` |
+
+`auto.components` 의 row 별 level 에 따라 `MERGE_MODULE` 또는 `MERGE_PART` 로 분기.
+`(:Part)-[:CONTAINED_IN]->(:Module)-[:CONTAINED_IN]->(:System)` 체인.
+
+### 7.3 새 deterministic 엣지
+
+- **RECALL_OF** — `load_recall_components.py` :
+  - `auto.events_recalls.component_text` 정규화 (영문 stem `bags→bag`/`hoses→hos`) 후
+    `auto.components.{name_norm, aliases}` 매칭. exact 0.85 / alias 0.80 / token 0.65.
+  - 매칭된 row 는 `auto.events_recalls.component_id` 백필 + Neo4j `(:Recall)-[:RECALL_OF]->(:Module|:Part)` 적재.
+  - 미매칭 row 는 그대로 두고 P3 LLM 이 자유 텍스트 → Part 추론으로 재시도.
+
+- **SUPPLIED_BY** — `load_supplier_edges.py` + `supplier_seed.yaml` :
+  - 매뉴얼 시드의 (supplier, component_canonical_name, system_code) 트리플 → Neo4j 엣지.
+  - 누락 component 는 `_ensure_component_module` 로 새 `:Module {level:4}` 자동 등록.
+  - source_type='manual_supplier_seed', validated_status='validated', confidence=0.95.
+
+- **Plant / Standard / Complaint** — `load_seed_standards_plants.py` + `load_complaints_neo4j.py`.
+  `(:Manufacturer)-[:OWNS_PLANT]->(:Plant)`, `:Standard` 노드 (엣지는 KNCAP/KATRI 후속),
+  `(:VehicleVariant)-[:REPORTED_IN]->(:Complaint)`.
+
+### 7.4 P3 LLM + P4 Cross-Validate
+
+```
+vec.chunks (manufacturer_id IS NOT NULL,
+            source IN ('nhtsa_recall','nhtsa_complaint','wikipedia_auto'))
+        │
+        ▼  chunk_selector.select_auto_chunks  (per-manufacturer cap)
+        │
+   AutoRelationExtractor.extract(chunk, ctx)   ← prompt SSOT: schema-aware
+        │      target_relations: [SUPPLIED_BY, RECALL_OF]   ← 1차 활성
+        │      deferred (enabled=false): COMPETES_WITH, MANUFACTURED_AT,
+        │                                CONTAINS_MODULE, CONTAINS_PART
+        ▼
+   ExtractorEngine.merge   ← (rel_type, head_norm, tail_norm, snapshot_year) dedupe
+        │
+        ▼
+   staging_writer.upsert_staging → auto.staging_relations
+        │      gate: ≥0.80 auto_accept / 0.65 needs_review / <0.65 rejected
+        ▼
+   cross_validate.run_p4
+        │      ① P2 SSOT 일치 → validated (confidence boost ≥ 0.95)
+        │      ② P2 충돌 → rejected (deterministic 우선)
+        │      ③ 결정 없음 + 0.80↑ → candidate (graph load with flag)
+        │      ④ 결정 없음 + 0.65↑ → needs_review (graph load + flag)
+        ▼
+   Neo4j MERGE (relations 별 cypher)  + auto.staging_relations.{p4_decision, neo4j_loaded_at}
+```
+
+비용 가드: `autonexusgraph.llm.budget_aware.budget_aware_client` 그대로 재사용 — `--hard-limit-usd`.
+
+### 7.5 검증 절차 (Neo4j/PG 가 떠 있는 환경에서)
+
+```bash
+# 0) 마이그레이션 적용 (10_autograph_bom.sql / 11_autograph_staging.sql 자동 실행).
+make up
+
+# 1) PG 데이터 채우기 (변경 없음, 멱등).
+make ingest-auto-all
+make load-auto-all      # 새 타겟 — 의존 순서: neo4j-init → pg → specs → neo4j → bridge → aihub
+                        #          → supplier-edges → seed-standards-plants → complaints-neo4j
+                        #          → recall-components → build-chunks-auto
+
+# 2) §6.7 메타 무결성 — 모든 auto 엣지가 confidence/snapshot/source 필수.
+echo "MATCH ()-[r]->() WHERE
+        (r.confidence_score IS NULL OR r.source_type IS NULL OR r.snapshot_year IS NULL)
+        AND any(l IN labels(startNode(r)) WHERE l IN
+            ['Manufacturer','VehicleModel','VehicleVariant','Module','Part','Supplier','Recall','Complaint','Plant','Standard','System'])
+      RETURN count(*) AS missing" | cypher-shell
+# 기대: missing = 0
+
+# 3) 핵심 invariant 회귀 체크 — Supplier 식별 / Component 중복키 / ghost Variant / System 이름.
+cypher-shell <<'EOF'
+// 0.1 Supplier 식별
+MATCH (s:Supplier) WHERE s.entity_id IS NULL RETURN count(*) AS supplier_no_id;
+// 0.2 Component 중복키 잔재 — :Module 노드에 component_id 가 있으면 안 됨.
+MATCH (m:Module) WHERE m.component_id IS NOT NULL RETURN count(*) AS module_with_legacy_key;
+// 0.3 Ghost variant — name·year 둘 다 비어있는 VehicleVariant.
+MATCH (v:VehicleVariant) WHERE v.model_year IS NULL AND v.trim IS NULL
+                          AND v.body_class IS NULL RETURN count(*) AS ghost_variant;
+// 0.8 System 이름.
+MATCH (s:System) WHERE s.name IS NULL RETURN count(*) AS system_no_name;
+EOF
+# 기대: 모두 0 (또는 0 에 근접 — ghost_variant 는 데이터 의존).
+
+# 4) Cross-Domain 진입 — 본 PR 의 결정적 SUPPLIED_BY + manual seed 가 살아있는지.
+echo "MATCH (s:Supplier {name:'LG에너지솔루션'})<-[:SUPPLIED_BY]-(m:Module)
+      RETURN s.name, m.name, m.system_code LIMIT 5" | cypher-shell
+
+# 5) P3 비용 dry-run.
+make extract-auto-p3-cost MFR_IDS=498 P3_LIMIT=20
+
+# 6) P3 실행 + P4 검증 (실제 LLM 호출).
+make extract-auto-p3 MFR_IDS=498 P3_LIMIT=20 P3_HARD_LIMIT=0.5
+make validate-auto-p4
+
+# 7) P3 산출이 staging 에 들어갔는지 + P4 결정.
+psql -c "SELECT relation_type, gate_status, p4_decision, count(*)
+           FROM auto.staging_relations
+          GROUP BY 1,2,3 ORDER BY 1,2,3;"
+```
+
+### 7.6 본 PR 이 다루지 않은 (deferred) 항목 — 2026-05-28 Phase B 후 갱신
+
+| 영역 | 상태 | 위치 |
+|---|---|---|
+| Wikidata P176 자동 SUPPLIED_BY (SPARQL) | ✅ wired | `loaders.load_wikidata_part_supplies` 가 staging→P4→Neo4j |
+| LLM 관계 활성화 (COMPETES_WITH) | wired but disabled | `ontology/auto/relations.yaml` 의 `enabled:false` (비용/환각 위험) |
+| `MANUFACTURED_AT` 구체 모델-공장 매핑 | ✅ seed 적용 | `ontology/auto/manufactured_at_seed.yaml` (46 매핑) + `loaders.load_manufactured_at` |
+| `COMPLIES_WITH` (차량↔표준) | 미연결 | 표준 노드만 존재. KNCAP/KATRI/IR 수집 후 P3 LLM 으로 보강 예정 |
+| KNCAP / Euro NCAP / IIHS | KNCAP 인터페이스만 (`ingestion.kncap` + `loaders.load_kncap`). Euro NCAP/IIHS 는 미구현 | 외부 채널 약관 검토 후 |
+| `:Part` 대량 적재 | LLM P3 RECALL_OF 결과에서 자연 발생 | manual seed 는 Module 위주 |
+| integration test (`pytest -m integration`) | 마커 없음 (0 케이스) | 실제 Neo4j/PG 가 필요 — 별도 CI PR |
+| eval/qa_gold 확장 (도내 100/100 + CD 30 완전) | seed: finance 30 / auto 42 / cross 30 | `make validate-gold-qa` lint 통과. 100 row 확장은 별도 |
+
+위 deferred 들은 본 도큐먼트가 다루는 골격 (Module/Part 분리 / P3·P4 / Standard·Plant seed) 범위 밖이다. ontology · 비용 가드 · 적재 helper · 테스트 인프라는 그대로 재사용 가능.

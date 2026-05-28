@@ -1,0 +1,223 @@
+# AutoGraph 자동차 도메인 관계 정의 (SSOT).
+#
+# 명세 규칙:
+#   type           : Neo4j 관계 타입 (SCREAMING_SNAKE_CASE)
+#   from / to      : 양 끝 엔티티 라벨 (entities.yaml 의 키)
+#   directed       : (from)-[r]->(to) 방향
+#   cardinality    : one-to-one / one-to-many / many-to-many
+#   class          : main_hop (BOM 계층) | side_hop (보조)
+#   provenance     : deterministic | llm | hybrid
+#   pass           : P2 | P3 | P4 (PRD §6.6)
+#   confidence_default : 출처 등급 기본값 (PRD §3.5)
+#   enabled        : 본 PR 에서 적재 활성화 여부 (P3 단계적 활성화용)
+#   meta_required  : 엣지 속성 — §6.7 의 의무 메타.
+
+version: 1
+last_updated: 2026-05-28
+
+# 모든 엣지에 공통으로 강제되는 메타 키 (PRD §6.7).
+edge_required_meta:
+  - source_type            # 'nhtsa_vpic' | 'wikidata_p176' | 'manual_seed' | 'llm_p3' | ...
+  - source_id              # 출처 식별자 (rcept_no / chunk_id / 'manual' …)
+  - confidence_score       # 0.0 ~ 1.0
+  - validated_status       # 'verified' | 'validated' | 'candidate' | 'needs_review' | 'rejected'
+  - snapshot_year          # 기준 연도 (없으면 적재 연도)
+  - extraction_method      # 'deterministic' | 'llm' | 'wikidata' | 'manual'
+
+relations:
+
+  # ── BOM 메인 홉 (Manufacturer → ... → Part) ─────────────────────
+  MANUFACTURES:
+    from: Manufacturer
+    to: VehicleModel
+    directed: true
+    cardinality: one-to-many
+    class: main_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 1.0
+    enabled: true
+
+  HAS_VARIANT:
+    from: VehicleModel
+    to: VehicleVariant
+    directed: true
+    cardinality: one-to-many
+    class: main_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 1.0
+    enabled: true
+
+  CONTAINS_SYSTEM:                # VehicleModel → System (어떤 모델이 어떤 시스템을 가지나)
+    from: VehicleModel
+    to: System
+    directed: true
+    cardinality: many-to-many
+    class: main_hop
+    provenance: hybrid             # 1차는 manufacturer 매핑 seed, llm 보강 가능
+    pass: P2
+    confidence_default: 0.85
+    enabled: true
+
+  CONTAINS_COMPONENT:             # VehicleModel → Module / Part (직접 장착)
+    from: VehicleModel
+    to: Module                      # Part 도 동일 관계 (Cypher 는 라벨 union)
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: hybrid             # AI-Hub deterministic + LLM 후보
+    pass: P2
+    confidence_default: 0.85
+    enabled: true
+    notes: |
+      "VehicleModel 이 어떤 모듈/부품을 장착하는가". 계층 (System) 을 건너뛰는
+      직결. AI-Hub 라벨 / 매뉴얼 / LLM 추출이 이 엣지를 만든다.
+
+  CONTAINED_IN:                   # Part/Module → System / Module (계층 상향)
+    from: Module                    # Part 도 동일 관계로 module 또는 system 에 붙음 (양쪽 허용)
+    to: System
+    directed: true
+    cardinality: many-to-one
+    class: main_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 1.0
+    enabled: true
+    notes: |
+      구현: Part → CONTAINED_IN → Module, Module → CONTAINED_IN → System.
+      Cypher 쿼리에서 동일 라벨로 1..2 hop 탐색.
+
+  # ── 부품/공급망 ─────────────────────────────────────────────────
+  SUPPLIED_BY:
+    from: Module                    # Module 또는 Part — 양쪽 허용
+    to: Supplier
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: hybrid              # Wikidata P176 (deterministic) + LLM (candidate)
+    pass: P3
+    confidence_default: 0.80
+    enabled: true
+    notes: |
+      Wikidata P176 일치 → deterministic 0.95.
+      LLM 추출 → 0.60~0.85 후보 → P4 cross-validate.
+
+  # ── 리콜 / 결함 신고 (시점 메타 필수) ───────────────────────────
+  AFFECTED_BY:
+    from: VehicleVariant            # 또는 VehicleModel (variant 미해결 시 fallback)
+    to: Recall
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 1.0
+    enabled: true
+
+  RECALL_OF:                      # Recall → 구체 Component/Module/Part
+    from: Recall
+    to: Module                      # 또는 Part. Cypher 는 라벨 union 으로 매칭.
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: hybrid
+    pass: P2                        # 1차는 component_text 정규화 매칭 deterministic
+    confidence_default: 0.85
+    enabled: true
+    notes: |
+      P2 deterministic: component_text → components.name_norm/aliases 매칭.
+      P3 LLM: 자유 텍스트 ("front airbag inflator") → Part 추론.
+
+  REPORTED_IN:
+    from: VehicleVariant
+    to: Complaint
+    directed: true
+    cardinality: one-to-many
+    class: side_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 1.0
+    enabled: true
+
+  INVESTIGATED_BY:
+    from: VehicleVariant            # 또는 VehicleModel (variant 미해결 시 fallback)
+    to: Investigation
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 0.95
+    enabled: true
+    notes: |
+      NHTSA ODI 가 개시·종결한 결함 조사. NHTSA_ACTION_NUMBER 단위.
+      Investigation 이 리콜로 종결되면 campno 가 채워지고 동일 Recall 노드 와의 연결은
+      별도 INVESTIGATION_LED_TO_RECALL 관계 (선택 — load_auto_investigations 가 처리).
+
+  # ── 규격 / 평가 ────────────────────────────────────────────────
+  COMPLIES_WITH:
+    from: VehicleVariant
+    to: Standard
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: hybrid
+    pass: P2
+    confidence_default: 0.90
+    enabled: true
+
+  SAFETY_RATED_BY:
+    from: VehicleVariant
+    to: Standard                    # NCAP / KNCAP / EuroNCAP 도 Standard 의 일종
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 0.95
+    enabled: true
+
+  # ── 생산 / 경쟁 ───────────────────────────────────────────────
+  MANUFACTURED_AT:
+    from: VehicleModel
+    to: Plant
+    directed: true
+    cardinality: many-to-many
+    class: side_hop
+    provenance: hybrid
+    pass: P2                        # 1차 plants_seed, 2차 LLM
+    confidence_default: 0.85
+    enabled: true
+
+  OWNS_PLANT:                      # OEM 이 운영하는 공장.
+    from: Manufacturer
+    to: Plant
+    directed: true
+    cardinality: one-to-many
+    class: side_hop
+    provenance: deterministic
+    pass: P2
+    confidence_default: 0.95
+    enabled: true
+    notes: |
+      plants_seed 는 (plant, OEM) 까지만 알려준다. 모델↔공장 (MANUFACTURED_AT) 의
+      구체 매핑은 KNCAP/IR 수집 PR 에서 추가. 그 전에도 OEM↔공장 관계는 노출 가능.
+
+  COMPETES_WITH:
+    from: VehicleModel
+    to: VehicleModel
+    directed: false
+    cardinality: many-to-many
+    class: side_hop
+    provenance: llm
+    pass: P3
+    confidence_default: 0.65
+    enabled: false                  # 본 PR 비활성 (다음 패스)
+
+# ── 명명 컨벤션 ─────────────────────────────────────────────────
+naming_conventions:
+  entity_type:    PascalCase (VehicleModel, Supplier)
+  relation_type:  SCREAMING_SNAKE_CASE (MANUFACTURES, SUPPLIED_BY)
+  property:       snake_case (confidence_score, snapshot_year)
+  direction:      "FROM -> TO (e.g. Manufacturer MANUFACTURES VehicleModel)"

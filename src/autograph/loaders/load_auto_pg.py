@@ -13,8 +13,8 @@
     auto.master_vehicle_variants
     auto.events_recalls
     auto.events_complaints
-    (auto.spec_measurements 은 vPIC variants 의 일부 측정값 + Canadian specs 에서 추출.
-     MVP 에서는 빈 INSERT 만 — 단위·키 매핑은 후속.)
+    (auto.spec_measurements 은 본 모듈이 만들지 않는다 — Canadian specs 의 dim/weight
+     키 매핑은 `load_auto_specs.py` 가 담당. 본 모듈은 마스터·이벤트만.)
 
 UPSERT 규칙:
     - manufacturers : (manufacturer_id) — NHTSA MakeId 우선.
@@ -64,8 +64,7 @@ def _resolve_make_model_variant(
 ) -> tuple[int | None, int | None, int | None]:
     """make+model+year → (manufacturer_id, model_id, variant_id) 단일 LEFT JOIN 1회.
 
-    이전: row 마다 mfr/model/variant 3 회 SELECT (N+1 패턴, 대량 적재 시 시간↑).
-    현재: 한 쿼리로 모두. 없으면 해당 슬롯이 NULL.
+    매칭 실패한 슬롯은 NULL — recall/complaint row 가 일부 메타만 가져도 적재는 진행.
     """
     if not make_name:
         return None, None, None
@@ -182,11 +181,18 @@ def _ensure_variant(cur, *, model_id: int, model_year: int,
                     trim: str | None = None,
                     fuel_type: str | None = None,
                     body_class: str | None = None,
+                    drive_type: str | None = None,
+                    transmission: str | None = None,
                     source: str, source_ref: str | None,
                     raw: dict | None = None) -> int:
-    """variants UPSERT — 부분 unique index 사용으로 COALESCE 정합."""
+    """variants UPSERT — 부분 unique index 사용으로 COALESCE 정합.
+
+    SELECT 후 존재하면 빈 값(body_class/drive_type/transmission)을 보강하기 위해 UPDATE 도 시도.
+    이렇게 해야 vPIC 1차 적재(이름만) 이후 canspec 2차 적재(body/drive 보강)가 같은 row 를 채운다.
+    """
     cur.execute("""
-        SELECT variant_id FROM auto.master_vehicle_variants
+        SELECT variant_id, body_class, drive_type, transmission, fuel_type
+          FROM auto.master_vehicle_variants
         WHERE model_id = %s AND model_year = %s
           AND COALESCE(trim, '') = COALESCE(%s, '')
           AND COALESCE(fuel_type, '') = COALESCE(%s, '')
@@ -194,14 +200,27 @@ def _ensure_variant(cur, *, model_id: int, model_year: int,
     """, (model_id, model_year, trim, fuel_type))
     r = cur.fetchone()
     if r:
-        return r[0]
+        vid = r[0]
+        # NULL 컬럼만 보강 (이미 값이 있으면 유지).
+        cur.execute("""
+            UPDATE auto.master_vehicle_variants
+               SET body_class  = COALESCE(body_class,  %s),
+                   drive_type  = COALESCE(drive_type,  %s),
+                   transmission= COALESCE(transmission,%s),
+                   fuel_type   = COALESCE(fuel_type,   %s)
+             WHERE variant_id = %s
+               AND (body_class IS NULL OR drive_type IS NULL
+                    OR transmission IS NULL OR fuel_type IS NULL)
+        """, (body_class, drive_type, transmission, fuel_type, vid))
+        return vid
     cur.execute("""
         INSERT INTO auto.master_vehicle_variants
           (model_id, model_year, trim, fuel_type, body_class,
-           source, source_ref, raw)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+           drive_type, transmission, source, source_ref, raw)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
         RETURNING variant_id
     """, (model_id, model_year, trim, fuel_type, body_class,
+          drive_type, transmission,
           source, source_ref,
           json.dumps(raw or {}, ensure_ascii=False, default=str)))
     return cur.fetchone()[0]
@@ -257,11 +276,12 @@ def load_vpic(*, dry_run: bool = False) -> LoadStats:
                         market="US",
                         source="nhtsa_vpic",
                         source_ref=str(row.get("model_id_vpic")))
+                    # GetModelsForMakeYear 는 trim/fuel/body 를 반환하지 않으므로 이 시점에선
+                    # (model_id, year) 한 행만 생성. canspec / wikipedia / DecodeVin 같은
+                    # 후속 source 가 _ensure_variant 호출로 body_class·drive_type 등을 보강한다.
                     _ensure_variant(cur,
                         model_id=model_id,
                         model_year=model_year,
-                        trim=None,
-                        fuel_type=None,
                         source="nhtsa_vpic",
                         source_ref=f"{make_id}/{row.get('model_id_vpic')}/{model_year}",
                         raw=row.get("raw") or {})
@@ -307,6 +327,9 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
                     manufacturer_id, model_id, variant_id = _resolve_make_model_variant(
                         cur, make_name, model_name, model_year)
 
+                    # §6.7 의 snapshot_year 는 "관측 시점" — report_date 의 연도.
+                    # report_date 가 없으면 적재 연도 fallback. 차량 model_year 와는 별개.
+                    report_date_iso = _to_iso_date(r.get("ReportReceivedDate"))
                     cur.execute("""
                         INSERT INTO auto.events_recalls
                           (source, source_recall_no, manufacturer_id, model_id, variant_id,
@@ -315,7 +338,10 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
                         VALUES ('nhtsa', %s, %s, %s, %s, %s, %s, %s, %s,
                                 NULLIF(%s, '')::date, %s,
                                 NULLIF(%s, '')::bigint,
-                                %s::jsonb, %s)
+                                %s::jsonb,
+                                COALESCE(
+                                  EXTRACT(YEAR FROM NULLIF(%s, '')::date)::SMALLINT,
+                                  EXTRACT(YEAR FROM now())::SMALLINT))
                         ON CONFLICT (source, source_recall_no) DO UPDATE SET
                           manufacturer_id = COALESCE(EXCLUDED.manufacturer_id,
                                                       auto.events_recalls.manufacturer_id),
@@ -330,11 +356,11 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
                         manufacturer_id, model_id, variant_id,
                         r.get("Component"), r.get("Summary"),
                         r.get("Consequence"), r.get("Remedy"),
-                        _to_iso_date(r.get("ReportReceivedDate")),
+                        report_date_iso,
                         "US",
                         str(r.get("PotentialNumberofUnitsAffected") or "").replace(",", ""),
                         json.dumps(r, ensure_ascii=False, default=str),
-                        model_year,
+                        report_date_iso,
                     ))
                     cur.execute("RELEASE SAVEPOINT sp_recall")
                     stats.inserted += 1
@@ -386,6 +412,9 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
                     if r.get("components"):
                         components = [c.strip() for c in str(r["components"]).split(";") if c.strip()]
 
+                    # snapshot_year = filed_date 연도. 없으면 incident_date 연도. 그것도 없으면 적재 연도.
+                    filed_iso = _to_iso_date(r.get("dateComplaintFiled"))
+                    incident_iso = _to_iso_date(r.get("dateOfIncident"))
                     cur.execute("""
                         INSERT INTO auto.events_complaints
                           (source, source_complaint_no, manufacturer_id, model_id, variant_id,
@@ -394,7 +423,11 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
                         VALUES ('nhtsa', %s, %s, %s, %s, %s, %s,
                                 NULLIF(%s, '')::date,
                                 NULLIF(%s, '')::date,
-                                'US', %s::jsonb, %s)
+                                'US', %s::jsonb,
+                                COALESCE(
+                                  EXTRACT(YEAR FROM NULLIF(%s, '')::date)::SMALLINT,
+                                  EXTRACT(YEAR FROM NULLIF(%s, '')::date)::SMALLINT,
+                                  EXTRACT(YEAR FROM now())::SMALLINT))
                         ON CONFLICT (source, source_complaint_no) DO UPDATE SET
                           manufacturer_id = COALESCE(EXCLUDED.manufacturer_id,
                                                      auto.events_complaints.manufacturer_id),
@@ -408,10 +441,11 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
                         r.get("odiNumber") or f"{make_name}-{model_name}-{model_year}-{r.get('id','')}",
                         manufacturer_id, model_id, variant_id,
                         components, r.get("summary"),
-                        _to_iso_date(r.get("dateComplaintFiled")),
-                        _to_iso_date(r.get("dateOfIncident")),
+                        filed_iso,
+                        incident_iso,
                         json.dumps(r, ensure_ascii=False, default=str),
-                        model_year,
+                        filed_iso,
+                        incident_iso,
                     ))
                     cur.execute("RELEASE SAVEPOINT sp_complaint")
                     stats.inserted += 1

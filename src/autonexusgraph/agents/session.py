@@ -33,6 +33,10 @@ class SessionState:
     target_companies: list[str] = field(default_factory=list)
     # 인물명 목록 — 동명이인 분리(name, birth_year) 는 lookup 단계에서 처리
     target_persons: list[str] = field(default_factory=list)
+    # AutoGraph 도메인 — variant/model id + manufacturer name (auto/cross_domain turn 보존)
+    target_vehicles: list[int] = field(default_factory=list)
+    target_models: list[int] = field(default_factory=list)
+    target_makes: list[str] = field(default_factory=list)
     # 연도 hint
     last_year: int | None = None
     last_question_kind: str = ""
@@ -50,6 +54,9 @@ def _snapshot(state: SessionState) -> SessionState:
         state,
         target_companies=list(state.target_companies),
         target_persons=list(state.target_persons),
+        target_vehicles=list(state.target_vehicles),
+        target_models=list(state.target_models),
+        target_makes=list(state.target_makes),
     )
 
 
@@ -93,6 +100,9 @@ def update(
     *,
     target_companies: list[str] | None = None,
     target_persons: list[str] | None = None,
+    target_vehicles: list[int] | None = None,
+    target_models: list[int] | None = None,
+    target_makes: list[str] | None = None,
     last_year: int | None = None,
     last_question_kind: str = "",
     last_question: str = "",
@@ -113,6 +123,12 @@ def update(
             state.target_companies = list(target_companies)
         if target_persons:
             state.target_persons = list(target_persons)
+        if target_vehicles:
+            state.target_vehicles = [int(v) for v in target_vehicles]
+        if target_models:
+            state.target_models = [int(v) for v in target_models]
+        if target_makes:
+            state.target_makes = list(target_makes)
         if last_year is not None:
             state.last_year = last_year
         if last_question_kind:
@@ -133,6 +149,10 @@ def summarize(state: SessionState | None) -> str:
         parts.append(f"companies={','.join(state.target_companies[:5])}")
     if state.target_persons:
         parts.append(f"persons={','.join(state.target_persons[:3])}")
+    if state.target_makes:
+        parts.append(f"makes={','.join(state.target_makes[:3])}")
+    if state.target_models:
+        parts.append(f"models={','.join(str(m) for m in state.target_models[:3])}")
     if state.last_year is not None:
         parts.append(f"year={state.last_year}")
     return "; ".join(parts)

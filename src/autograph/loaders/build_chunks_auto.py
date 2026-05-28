@@ -3,11 +3,12 @@
 대상:
 - nhtsa_recalls 의 Summary / Consequence / Remedy 본문
 - nhtsa_complaints 의 summary 본문
-- (옵션) wikipedia_auto 본문 — 별도 ingestion 필요
+- wikipedia_auto 본문 (extract + html 일부) — autograph.ingestion.wikipedia_auto 가 producer
 
 청크 단위:
 - 보고서 1건당 1청크 (작아서 분리 불필요). token_count 는 단순 char/4 추정.
-- source: 'nhtsa_recall' | 'nhtsa_complaint'
+- wiki: 페이지당 1청크 (extract + infobox key=value 직렬화).
+- source: 'nhtsa_recall' | 'nhtsa_complaint' | 'wikipedia_auto'
 - 메타: source_recall_no / source_complaint_no, manufacturer_id, model_id, variant_id
 
 embedding 은 본 모듈에서 호출하지 않음 — 기존 finance 와 동일하게 별도
@@ -15,6 +16,7 @@ embedding 은 본 모듈에서 호출하지 않음 — 기존 finance 와 동일
 
 CLI:
     python -m autograph.loaders.build_chunks_auto
+    python -m autograph.loaders.build_chunks_auto --source wikipedia
     python -m autograph.loaders.build_chunks_auto --dry-run
 """
 
@@ -23,7 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from pathlib import Path
 
+from autonexusgraph.config import get_settings
 from autonexusgraph.db.postgres import get_connection
 
 
@@ -153,10 +157,126 @@ def build_from_complaints() -> int:
     return n
 
 
+def _wikipedia_root() -> Path:
+    return get_settings().ingest_raw_dir / "auto" / "wikipedia"
+
+
+def _infobox_to_text(infobox: dict | None) -> str:
+    """{{Infobox 회사 ...}} dict → 'key: value\\n' 직렬화. 검색 가능 텍스트화."""
+    if not infobox:
+        return ""
+    lines: list[str] = []
+    for k, v in infobox.items():
+        if not (k and v):
+            continue
+        # 너무 긴 값은 트리밍 (이미 client 가 1000 자 cap).
+        lines.append(f"{k}: {v}")
+    return "\n".join(lines)
+
+
+def _strip_html(html: str) -> str:
+    """매우 단순 HTML → 텍스트. 태그 제거 + entity 단순 처리. 외부 lib 의존 회피."""
+    import re as _re
+    if not html:
+        return ""
+    # script/style 블록 제거.
+    txt = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html,
+                  flags=_re.IGNORECASE | _re.DOTALL)
+    # 모든 태그 제거.
+    txt = _re.sub(r"<[^>]+>", " ", txt)
+    # entity 단순 디코드.
+    txt = (txt.replace("&amp;", "&").replace("&lt;", "<")
+              .replace("&gt;", ">").replace("&quot;", '"')
+              .replace("&#160;", " ").replace("&nbsp;", " "))
+    # 공백 정리.
+    txt = _re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
+def build_from_wikipedia(*, max_html_chars: int = 4000) -> int:
+    """data/raw/auto/wikipedia/**/*.json → vec.chunks (source='wikipedia_auto').
+
+    페이지 1건당 1 청크. 본문은:
+        title + '\\n' + summary(extract) + '\\n[Infobox]\\n' + key:value... + '\\n' + html_text(앞부분)
+
+    매우 큰 페이지의 html_text 는 ``max_html_chars`` 까지만 — embedding 비용 가드.
+    """
+    root = _wikipedia_root()
+    if not root.exists():
+        log.warning("[chunks:wiki] root missing: %s — ingestion 먼저 실행", root)
+        return 0
+
+    conn = get_connection()
+    n = 0
+    with conn.cursor() as cur:
+        # 경로: {lang}/{models|manufacturers}/{id}.json
+        for f in root.glob("*/*/*.json"):
+            try:
+                payload = json.loads(f.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                log.warning("[chunks:wiki] bad json %s: %s", f, e)
+                continue
+
+            ent = payload.get("__entity") or {}
+            kind = ent.get("kind")        # 'models' | 'manufacturers'
+            ent_id = ent.get("id")
+            ent_name = ent.get("name")
+            title = payload.get("title") or ent_name or ""
+            extract = (payload.get("extract") or "").strip()
+            infobox_text = _infobox_to_text(payload.get("infobox"))
+            html_text = _strip_html(payload.get("html") or "")
+            if max_html_chars and len(html_text) > max_html_chars:
+                html_text = html_text[:max_html_chars] + " ..."
+
+            parts: list[str] = []
+            if title:
+                parts.append(f"제목: {title}")
+            if extract:
+                parts.append(extract)
+            if infobox_text:
+                parts.append("[Infobox]\n" + infobox_text)
+            if html_text:
+                parts.append(html_text)
+            text = "\n\n".join(parts).strip()
+            if not text:
+                continue
+
+            # 메타 — kind 에 따라 manufacturer_id / model_id 만 채움 (variant 없음).
+            mfr_id = ent_id if kind == "manufacturers" else None
+            model_id = ent_id if kind == "models" else None
+            uniq = f"wikipedia_auto::{f.parent.parent.name}::{kind}::{ent_id}"
+            metadata = {
+                "uniq": uniq,
+                "title": title,
+                "lang": payload.get("lang") or f.parent.parent.name,
+                "kind": kind,
+                "qid": ent.get("qid"),
+                "revision_id": payload.get("revision_id"),
+                "fullurl": (payload.get("raw_summary") or {}).get("fullurl"),
+                "extract_len": len(extract),
+            }
+            try:
+                _upsert_chunk(cur,
+                    source="wikipedia_auto",
+                    section="auto.wiki",
+                    text=text,
+                    metadata=metadata,
+                    manufacturer_id=mfr_id,
+                    model_id=model_id,
+                    variant_id=None)
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                log.warning("[chunks:wiki] %s: %s", uniq, e)
+    conn.commit()
+    log.info("[chunks:wiki] inserted/updated=%d", n)
+    return n
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="autograph.loaders.build_chunks_auto")
     ap.add_argument("--source",
-                    choices=["recalls", "complaints", "all"], default="all")
+                    choices=["recalls", "complaints", "wikipedia", "all"],
+                    default="all")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level,
@@ -166,6 +286,8 @@ def main() -> None:
         build_from_recalls()
     if args.source in ("complaints", "all"):
         build_from_complaints()
+    if args.source in ("wikipedia", "all"):
+        build_from_wikipedia()
 
 
 if __name__ == "__main__":

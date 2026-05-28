@@ -312,6 +312,40 @@ def summarize_by_adapter(per_q: list[dict]) -> dict[str, dict]:
     return out
 
 
+# ─── multi-hop 어댑터 간 차이 (PRD §10.7 — hybrid vs vector +30%p 자동 측정) ────
+def compute_hybrid_vs_vector(summary: dict[str, dict]) -> dict[str, Any]:
+    """hybrid 어댑터가 vector 어댑터 대비 multi-hop EM/F1 에서 얼마나 우위인지.
+
+    summary 에 두 어댑터 모두 ``multi_hop_n`` 가 있을 때만 의미. 단위는 %p (퍼센트 포인트).
+    PRD §10.7 목표: **+30%p**.
+    """
+    out: dict[str, Any] = {
+        "available": False,
+        "target_diff_pp": 30.0,
+        "target_met": False,
+    }
+    h = summary.get("hybrid") or {}
+    v = summary.get("vector") or {}
+    if "multi_hop_n" not in h or "multi_hop_n" not in v:
+        return out
+
+    em_diff = (h["multi_hop_em"] - v["multi_hop_em"]) * 100.0
+    f1_diff = (h["multi_hop_f1"] - v["multi_hop_f1"]) * 100.0
+    out.update({
+        "available": True,
+        "multi_hop_n":          {"hybrid": h["multi_hop_n"], "vector": v["multi_hop_n"]},
+        "hybrid_em":            h["multi_hop_em"],
+        "vector_em":            v["multi_hop_em"],
+        "em_diff_pp":           round(em_diff, 2),
+        "hybrid_f1":            h["multi_hop_f1"],
+        "vector_f1":            v["multi_hop_f1"],
+        "f1_diff_pp":           round(f1_diff, 2),
+        # 둘 중 하나라도 30%p 이상이면 PRD 목표 met.
+        "target_met":           (em_diff >= 30.0) or (f1_diff >= 30.0),
+    })
+    return out
+
+
 # ─── 보고서 출력 ────────────────────────────────────────────
 def write_summary_md(summary: dict, manifest: dict, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,7 +378,7 @@ def write_summary_md(summary: dict, manifest: dict, out_path: Path) -> None:
         ]) + " |")
     lines.append("")
 
-    # Multi-hop 비교 — PRD §2.2 목표
+    # Multi-hop 비교 — PRD §2.2 / §10.7 목표
     mh_summary = {a: s for a, s in summary.items() if "multi_hop_n" in s}
     if mh_summary:
         lines.append("## Multi-hop subset (PRD §2.2 목표: 75%+, hybrid vs vector +30%p)")
@@ -353,6 +387,62 @@ def write_summary_md(summary: dict, manifest: dict, out_path: Path) -> None:
         for a, s in mh_summary.items():
             lines.append(f"| {a} | {s['multi_hop_n']} | {s['multi_hop_em']:.3f} | {s['multi_hop_f1']:.3f} |")
         lines.append("")
+
+    # hybrid vs vector 차이 — PRD §10.7 +30%p 자동 검증.
+    hvv = manifest.get("hybrid_vs_vector") or {}
+    if hvv.get("available"):
+        met = "✅" if hvv["target_met"] else "❌"
+        lines.append("### Hybrid vs Vector (PRD §10.7 목표: +30%p)")
+        lines.append(
+            f"- EM: hybrid={hvv['hybrid_em']:.3f} vs vector={hvv['vector_em']:.3f} → "
+            f"**{hvv['em_diff_pp']:+.1f}%p**"
+        )
+        lines.append(
+            f"- F1: hybrid={hvv['hybrid_f1']:.3f} vs vector={hvv['vector_f1']:.3f} → "
+            f"**{hvv['f1_diff_pp']:+.1f}%p**"
+        )
+        lines.append(f"- 목표 +{hvv['target_diff_pp']:.0f}%p {met}")
+        lines.append("")
+
+    # Bridge 데이터 품질 — PRD §10.6 (어댑터 무관, DB 한 번 스냅샷).
+    bq = manifest.get("bridge_quality") or {}
+    if bq:
+        try:
+            from eval.metrics.bridge_quality import format_summary_md as _bq_md
+            lines.append(_bq_md(bq))
+            lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Main-Hop Efficiency — PRD §10.13.
+    mhe = manifest.get("main_hop_efficiency") or {}
+    if mhe:
+        try:
+            from eval.metrics.main_hop_efficiency import format_summary_md as _mhe_md
+            lines.append(_mhe_md(mhe))
+            lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Confidence-Weighted Accuracy — PRD §8.3.
+    cwa = manifest.get("confidence_weighted") or {}
+    if cwa:
+        try:
+            from eval.metrics.confidence_weighted import format_summary_md as _cwa_md
+            lines.append(_cwa_md(cwa))
+            lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Latency — PRD §10.14.
+    lat = manifest.get("latency") or {}
+    if lat:
+        try:
+            from eval.metrics.latency import format_summary_md as _lat_md
+            lines.append(_lat_md(lat))
+            lines.append("")
+        except Exception:  # noqa: BLE001
+            pass
 
     lines.append("## 비용 가드 (budget)")
     for adapter, budget in manifest.get("budgets", {}).items():
@@ -444,6 +534,47 @@ def main() -> int:
     summary = summarize_by_adapter(all_per_q)
     write_per_question_csv(all_per_q, out_dir / "per_question.csv")
 
+    # PRD §10.7 hybrid vs vector +30%p 자동 측정.
+    hvv = compute_hybrid_vs_vector(summary)
+
+    # PRD §10.6 Bridge 데이터 품질 스냅샷 (DB 미가용 시 빈 dict).
+    try:
+        from eval.metrics.bridge_quality import collect_bridge_quality
+        bq = collect_bridge_quality()
+    except Exception as exc:   # noqa: BLE001
+        print(f"  [bridge_quality] skip: {exc}", file=sys.stderr)
+        bq = {}
+
+    # 모든 adapter 의 prediction row 합치기 — 추가 메트릭 입력.
+    all_pred_rows: list[dict] = []
+    for ad_name in adapter_names:
+        pred_path = out_dir / f"{ad_name}_predictions.jsonl"
+        all_pred_rows.extend(load_jsonl(pred_path))
+
+    # PRD §10.13 Main-Hop Efficiency.
+    try:
+        from eval.metrics.main_hop_efficiency import main_hop_efficiency
+        mhe = main_hop_efficiency(all_pred_rows, all_per_q)
+    except Exception as exc:   # noqa: BLE001
+        print(f"  [main_hop_efficiency] skip: {exc}", file=sys.stderr)
+        mhe = {}
+
+    # PRD §8.3 Confidence-Weighted Accuracy.
+    try:
+        from eval.metrics.confidence_weighted import confidence_weighted_accuracy
+        cwa = confidence_weighted_accuracy(all_per_q, all_pred_rows)
+    except Exception as exc:   # noqa: BLE001
+        print(f"  [confidence_weighted] skip: {exc}", file=sys.stderr)
+        cwa = {}
+
+    # PRD §10.14 Latency (도메인 내 <8s / Cross <12s).
+    try:
+        from eval.metrics.latency import latency_summary
+        lat = latency_summary(all_per_q, gold_rows)
+    except Exception as exc:   # noqa: BLE001
+        print(f"  [latency] skip: {exc}", file=sys.stderr)
+        lat = {}
+
     manifest = {
         "run_id": run_id,
         "gold": str(args.gold),
@@ -454,6 +585,11 @@ def main() -> int:
         "started_at": datetime.now().isoformat(),
         "git": git_info(),
         "budgets": budgets,
+        "hybrid_vs_vector": hvv,
+        "bridge_quality": bq,
+        "main_hop_efficiency": mhe,
+        "confidence_weighted": cwa,
+        "latency": lat,
     }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

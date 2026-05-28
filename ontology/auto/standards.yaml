@@ -1,0 +1,129 @@
+# 안전·환경·평가 규격 시드 — :Standard 노드의 SSOT.
+#
+# 본 시드는 ~30 개 핵심 표준만 포함. 미수록 표준은 LLM 추출/사람 검토 후 추가.
+
+version: 1
+last_updated: 2026-05-28
+
+standards:
+
+  # ── 미국 — FMVSS (Federal Motor Vehicle Safety Standards) ──
+  - code: FMVSS_208
+    name: FMVSS No. 208 — Occupant Crash Protection
+    region: US
+    agency: NHTSA
+    url: https://www.nhtsa.gov/laws-regulations/fmvss
+
+  - code: FMVSS_214
+    name: FMVSS No. 214 — Side Impact Protection
+    region: US
+    agency: NHTSA
+
+  - code: FMVSS_301
+    name: FMVSS No. 301 — Fuel System Integrity
+    region: US
+    agency: NHTSA
+
+  - code: FMVSS_126
+    name: FMVSS No. 126 — Electronic Stability Control
+    region: US
+    agency: NHTSA
+
+  # ── 유럽 — ECE / EU 규정 ──
+  - code: ECE_R94
+    name: ECE R94 — Frontal Collision Protection
+    region: EU
+    agency: UNECE
+
+  - code: ECE_R95
+    name: ECE R95 — Lateral Collision Protection
+    region: EU
+    agency: UNECE
+
+  - code: ECE_R13
+    name: ECE R13 — Braking
+    region: EU
+    agency: UNECE
+
+  - code: EU_TYPE_APPROVAL
+    name: EU Whole Vehicle Type Approval
+    region: EU
+    agency: EU
+
+  # ── 한국 — KS / KMVSS ──
+  - code: KMVSS_30
+    name: 자동차안전기준 제30조 — 좌석안전띠
+    region: KR
+    agency: MOLIT
+
+  - code: KMVSS_104
+    name: 자동차안전기준 제104조 — 정면충돌안전
+    region: KR
+    agency: MOLIT
+
+  - code: KS_R_1004
+    name: KS R 1004 — 자동차 좌석
+    region: KR
+    agency: KSA
+
+  # ── 평가 등급 (NCAP 시리즈) ──
+  - code: KNCAP
+    name: Korean New Car Assessment Program
+    region: KR
+    agency: MOLIT
+    url: https://www.kncap.org/
+
+  - code: NCAP_US
+    name: U.S. New Car Assessment Program
+    region: US
+    agency: NHTSA
+    url: https://www.nhtsa.gov/ratings
+
+  - code: EURO_NCAP
+    name: European New Car Assessment Programme
+    region: EU
+    agency: Euro NCAP
+    url: https://www.euroncap.com/
+
+  - code: IIHS_TSP
+    name: IIHS Top Safety Pick
+    region: US
+    agency: IIHS
+
+  # ── 배출 / 연비 ──
+  - code: EPA_TIER3
+    name: EPA Tier 3 — Emissions
+    region: US
+    agency: EPA
+
+  - code: EURO_6D
+    name: Euro 6d — Emissions
+    region: EU
+    agency: EU
+
+  - code: KR_LEZ
+    name: 저공해차 인증
+    region: KR
+    agency: ME    # 환경부
+
+  # ── 사이버보안 / OTA ──
+  - code: UN_R155
+    name: UN R155 — Cyber Security Management System
+    region: GLOBAL
+    agency: UNECE
+
+  - code: UN_R156
+    name: UN R156 — Software Update Management
+    region: GLOBAL
+    agency: UNECE
+
+  # ── ISO 자동차 일반 ──
+  - code: ISO_26262
+    name: ISO 26262 — Functional Safety
+    region: GLOBAL
+    agency: ISO
+
+  - code: ISO_21434
+    name: ISO 21434 — Road Vehicle Cybersecurity
+    region: GLOBAL
+    agency: ISO

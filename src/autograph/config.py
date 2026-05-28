@@ -15,6 +15,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+# data/raw 루트는 SSOT 로 autonexusgraph.config.Settings.ingest_raw_dir 한 곳만 사용.
+# AutoGraph 데이터는 `<ingest_raw_dir>/auto/<source>/...` 컨벤션 (ingestion/_common.save_raw 가 처리).
+
 
 class AutoSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -37,6 +40,11 @@ class AutoSettings(BaseSettings):
     katri_api_key: str = ""
     kncap_api_key: str = ""
 
+    # === data.go.kr (공공데이터포털) — 단일 키로 여러 API 활용 ===
+    # API 15089863 (한국 자동차 리콜정보), 15155857 (수리검사내역 — 파일) 등.
+    data_go_kr_api_key: str = ""
+    data_go_kr_base_url: str = "https://api.odcloud.kr/api"
+
     # === 시험인증 빅데이터 플랫폼 (KATRI 운영) — OAuth client credentials ===
     bigdata_tic_base_url: str = "https://oauth.bigdata-tic.kr"
     bigdata_tic_client_id: str = ""
@@ -51,9 +59,6 @@ class AutoSettings(BaseSettings):
     # 회원가입 후 마이페이지에서 API key 발급 (UUID, 이메일 수신).
     # 데이터셋 상세 페이지 → "다운로드" 버튼으로 승인 필수.
     aihub_api_key: str = ""
-
-    # === 데이터 루트 (finance 와 공유 가능, 자동차는 subdir 'auto/') ===
-    auto_raw_dir: Path = Field(default=PROJECT_ROOT / "data" / "raw" / "auto")
 
     # === 수집 범위 기본값 ===
     auto_ingest_makes: str = "HYUNDAI,KIA,GENESIS,TESLA"

@@ -1,0 +1,134 @@
+# P3 자동차 도메인 관계 추출 프롬프트.
+#
+# Schema-aware: ontology/auto/relations.yaml 의 enabled=true 관계만 추출 허용.
+# 본 PR 의 1차 활성: SUPPLIED_BY, RECALL_OF (extractors.yaml 의 auto_llm_relations 참조).
+# 그 외 ontology 가 enabled=true 라 해도 본 프롬프트의 target_relations 에 등장하지 않으면
+# 추출하지 않는다.
+#
+# 출력은 JSON Schema 강제 → LLMClient.chat_json() 으로 호출.
+
+version: 1
+last_updated: 2026-05-28
+
+# 본 추출 패스에서 활성화된 관계. ChunkSelector 가 chunk 선별 시도 함께 참조.
+target_relations: [SUPPLIED_BY, RECALL_OF]
+
+# 본 추출이 다루는 entity kind. ontology entities.yaml 의 라벨 부분집합.
+target_entity_kinds:
+  - Manufacturer
+  - VehicleModel
+  - VehicleVariant
+  - Module
+  - Part
+  - Supplier
+  - Recall
+
+system: |
+  당신은 자동차 부품·리콜·공급망 도메인의 관계 추출 전문가입니다.
+  주어진 본문 (NHTSA 리콜/결함 신고 / 위키피디아 / 매뉴얼) 에서 다음 두 관계만 정밀하게 추출하세요.
+
+  허용 관계 (이외 추출 금지):
+    SUPPLIED_BY  : 어떤 부품/모듈(Module|Part)이 어느 공급사(Supplier)에 의해 공급되는가
+    RECALL_OF    : 어떤 리콜(Recall)이 어느 부품/모듈(Module|Part)을 대상으로 하는가
+
+  엄격 규칙:
+    1. 본문에 명시적으로 언급된 관계만 추출. 추론·일반 상식 사용 금지.
+    2. 공급사 이름은 본문 그대로 (별칭은 alias 필드에 따로 적기).
+    3. 부품 표현이 매우 일반적이면 (예: "system"/"component" 단독) 추출 금지.
+    4. SUPPLIED_BY:
+       - "Bosch supplies the ABS module" 같이 동사가 명확할 때만.
+       - "made by" / "manufactured by" / "supplied by" / "provided by" 표현 우선.
+       - "uses parts from X" 같은 모호 표현은 confidence < 0.7.
+    5. RECALL_OF:
+       - 본문이 리콜/결함 텍스트일 때 그 리콜이 가리키는 구체 부품/모듈.
+       - 본문에 "Component" 컬럼 또는 "affects the ___" 같은 구절이 있으면 그것을 우선.
+       - 너무 일반적인 "vehicle"/"car" 는 부품이 아니므로 추출 금지.
+    6. 한 관계가 불확실하면 confidence < 0.7 — 본 단계에서 적재는 하되 needs_review.
+    7. 본문에 관계가 없으면 빈 리스트.
+
+  Anti-pattern (절대 추출 금지):
+    - "vehicles equipped with X" 같이 X가 supplier 가 아닌 표준명을 supplier 로 해석
+    - 단순 OEM 이름만 등장 — "Hyundai" 자체는 SUPPLIED_BY 대상 supplier 가 아님
+    - 직책/사람 이름
+    - 일반 동사 ("makes the world go", "drives innovation") 의 비유적 supply
+
+  반드시 다음 JSON 스키마로만 응답:
+  {
+    "entities": [
+      {
+        "name": str,
+        "kind": "Manufacturer"|"VehicleModel"|"VehicleVariant"|"Module"|"Part"|"Supplier"|"Recall",
+        "alias": str|null,
+        "confidence": float
+      }
+    ],
+    "relations": [
+      {
+        "head": str,                  # 부품·리콜 이름 또는 표준 식별자
+        "head_kind": "Module"|"Part"|"Recall",
+        "relation": "SUPPLIED_BY"|"RECALL_OF",
+        "tail": str,
+        "tail_kind": "Supplier"|"Module"|"Part",
+        "confidence": float,
+        "evidence": str               # 본문에서 직접 인용한 1-2 문장 (≤200자)
+      }
+    ]
+  }
+
+user_template: |
+  [차량/제조사 컨텍스트]
+    manufacturer_id={manufacturer_id} ({manufacturer_name})
+    model_id={model_id} ({model_name})
+    variant_id={variant_id}
+    snapshot_year={snapshot_year}
+  [본문 출처] {source} / chunk_id={chunk_id}
+  [섹션] {section}
+
+  [본문]
+  {chunk_text}
+
+  [지시]
+  위 본문에서 명시적으로 드러난 (SUPPLIED_BY, RECALL_OF) 관계만 위 JSON 스키마로 추출.
+  엄격하게 본문 근거만 사용. 추론·추측 금지. 관계가 없으면 빈 relations 배열 반환.
+
+# 출력 JSON Schema (chat_json 강제)
+json_schema:
+  name: AutoRelationExtraction
+  schema:
+    type: object
+    additionalProperties: false
+    required: [entities, relations]
+    properties:
+      entities:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [name, kind, confidence]
+          properties:
+            name: { type: string }
+            kind:
+              type: string
+              enum: [Manufacturer, VehicleModel, VehicleVariant, Module, Part, Supplier, Recall]
+            alias: { type: [string, "null"] }
+            confidence: { type: number, minimum: 0.0, maximum: 1.0 }
+      relations:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [head, head_kind, relation, tail, tail_kind, confidence, evidence]
+          properties:
+            head: { type: string }
+            head_kind:
+              type: string
+              enum: [Module, Part, Recall]
+            relation:
+              type: string
+              enum: [SUPPLIED_BY, RECALL_OF]
+            tail: { type: string }
+            tail_kind:
+              type: string
+              enum: [Supplier, Module, Part]
+            confidence: { type: number, minimum: 0.0, maximum: 1.0 }
+            evidence: { type: string, maxLength: 400 }

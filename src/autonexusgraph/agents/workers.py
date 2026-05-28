@@ -42,7 +42,9 @@ _FIN_RESEARCH_INTENTS = {"search_documents", "search_by_metadata", "get_chunk"}
 # auto 도메인 화이트리스트 (autograph.tools 함수명).
 _AUTO_GRAPH_ALLOWED = {
     "lookup_vehicle_graph", "lookup_supplier",
-    "list_components", "list_recalls_affecting",
+    "list_components", "list_systems_of_model", "list_models_with_system",
+    "list_recalls_affecting",
+    "list_investigations_affecting", "get_investigation_recall_chain",
     "get_suppliers_of_component", "get_vehicles_using_component",
     "find_vehicle_component_paths",
 }
@@ -50,7 +52,10 @@ _AUTO_SQL_ALLOWED = {
     "lookup_vehicle", "get_vehicle_info", "get_spec",
     "compare_vehicles", "get_safety_rating",
     # bridge 도 SQL 워커가 호출 (PG 단일 호출)
-    "bridge_corp_to_entity", "bridge_entity_to_corp", "cross_query",
+    "bridge_corp_to_entity", "bridge_entity_to_corp",
+    "bridge_sec_cik_to_entity", "bridge_entity_to_sec_cik",
+    "get_oem_financials_sec",
+    "cross_query",
 }
 _AUTO_RESEARCH_INTENTS = {
     "search_documents_auto", "search_by_metadata_auto", "get_chunk_auto",

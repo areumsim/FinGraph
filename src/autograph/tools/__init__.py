@@ -32,10 +32,14 @@ from .spec import (
 )
 from .graph import (
     find_vehicle_component_paths,
+    get_investigation_recall_chain,
     get_suppliers_of_component,
     get_vehicles_using_component,
     list_components,
+    list_investigations_affecting,
+    list_models_with_system,
     list_recalls_affecting,
+    list_systems_of_model,
     lookup_supplier,
 )
 from .graph import lookup_vehicle as lookup_vehicle_graph
@@ -47,7 +51,10 @@ from .retrieve import (
 from .bridge import (
     bridge_corp_to_entity,
     bridge_entity_to_corp,
+    bridge_entity_to_sec_cik,
+    bridge_sec_cik_to_entity,
     cross_query,
+    get_oem_financials_sec,
 )
 
 __all__ = [
@@ -61,7 +68,11 @@ __all__ = [
     "lookup_vehicle_graph",
     "lookup_supplier",
     "list_components",
+    "list_systems_of_model",
+    "list_models_with_system",
     "list_recalls_affecting",
+    "list_investigations_affecting",
+    "get_investigation_recall_chain",
     "get_suppliers_of_component",
     "get_vehicles_using_component",
     "find_vehicle_component_paths",
@@ -72,5 +83,8 @@ __all__ = [
     # bridge
     "bridge_corp_to_entity",
     "bridge_entity_to_corp",
+    "bridge_sec_cik_to_entity",
+    "bridge_entity_to_sec_cik",
+    "get_oem_financials_sec",
     "cross_query",
 ]

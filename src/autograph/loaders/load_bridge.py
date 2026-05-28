@@ -22,11 +22,61 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
 
 from autonexusgraph.config import get_settings
 from autonexusgraph.db.postgres import get_connection
 from autonexusgraph.ingestion._common import normalize_corp_name
+
+
+def _ensure_supplier(cur, *, name: str, wikidata_qid: str | None,
+                     country: str | None, lei: str | None,
+                     business_no: str | None,
+                     source: str, source_ref: str | None,
+                     confidence: float) -> int:
+    """auto.master_suppliers UPSERT — supplier_id 발급.
+
+    매칭 우선순위: (1) wikidata_qid 정확, (2) name_norm 정확.
+    중복 row 생성을 막아 :Supplier 노드가 Wikidata QID 별로 1개씩만 존재하게 한다.
+    """
+    name_norm = normalize_corp_name(name)
+    # 1) QID 매칭
+    if wikidata_qid:
+        cur.execute("""
+            SELECT supplier_id FROM auto.master_suppliers
+             WHERE wikidata_qid = %s LIMIT 1
+        """, (wikidata_qid,))
+        r = cur.fetchone()
+        if r:
+            # 메타 보강 (NULL 만)
+            cur.execute("""
+                UPDATE auto.master_suppliers
+                   SET name = COALESCE(name, %s),
+                       name_norm = COALESCE(name_norm, %s),
+                       country = COALESCE(country, %s),
+                       lei = COALESCE(lei, %s),
+                       business_no = COALESCE(business_no, %s),
+                       updated_at = now()
+                 WHERE supplier_id = %s
+            """, (name, name_norm, country, lei, business_no, r[0]))
+            return r[0]
+    # 2) name_norm 매칭 (QID 없는 source 용)
+    cur.execute("""
+        SELECT supplier_id FROM auto.master_suppliers
+         WHERE name_norm = %s LIMIT 1
+    """, (name_norm,))
+    r = cur.fetchone()
+    if r:
+        return r[0]
+    # 3) 신규 INSERT
+    cur.execute("""
+        INSERT INTO auto.master_suppliers
+          (name, name_norm, country, wikidata_qid, lei, business_no,
+           source, source_ref, confidence, validated_status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'candidate')
+        RETURNING supplier_id
+    """, (name, name_norm, country, wikidata_qid, lei, business_no,
+          source, source_ref, confidence))
+    return cur.fetchone()[0]
 
 
 log = logging.getLogger(__name__)
@@ -108,12 +158,14 @@ def match_manufacturers_by_name(cur) -> int:
 
 
 def match_suppliers_from_wikidata(cur) -> int:
-    """매칭 5단계 — Wikidata suppliers.jsonl 의 후보 supplier 들을 bridge 에 등록.
+    """매칭 5단계 — Wikidata suppliers.jsonl 의 후보 supplier 들을 등록.
 
-    corp_code 매칭 시도:
-      - LEI 일치 (entity_map id_type='lei')
-      - business_no 일치 (P3320 vs master.companies.extra->>'bizr_no')
-    매칭 실패면 corp_code=NULL 로만 등록 (auto 단독 entity).
+    동작:
+      1) auto.master_suppliers UPSERT → supplier_id 발급
+      2) bridge.corp_entity 에는 entity_id = str(supplier_id) (Wikidata QID 는 wikidata_qid 컬럼)
+         → manufacturer 행과 동일한 stringified-int 식별 체계로 통일.
+
+    corp_code 매칭 시도 (LEI / business_no / name 정규화). 매칭 실패면 corp_code=NULL.
     """
     src = get_settings().ingest_raw_dir / "auto" / "wikidata" / "suppliers.jsonl"
     if not src.exists():
@@ -135,6 +187,7 @@ def match_suppliers_from_wikidata(cur) -> int:
                 continue
             lei = row.get("lei")
             bizno = row.get("biznoKR")
+            country = row.get("countryLabel")
             # Wikidata P3320 (사업자등록번호) 일부 row 가 URL/QID 등으로 오염됨 — 한국
             # 사업자번호 형식 (12자 이하, 숫자/하이픈) 가 아닌 값은 무시.
             if bizno and (len(bizno) > 40 or bizno.startswith("http")):
@@ -142,6 +195,7 @@ def match_suppliers_from_wikidata(cur) -> int:
             if lei and len(lei) > 20:
                 lei = None
 
+            # FinGraph 측과의 corp_code 매핑 — 가능한 단서 순으로 시도.
             corp_code = None
             method = "name_exact"
             conf = 0.55
@@ -165,7 +219,6 @@ def match_suppliers_from_wikidata(cur) -> int:
                 if r:
                     corp_code, method, conf = r[0], "business_no", 0.90
             if corp_code is None:
-                # name 정규화 정확 매치 시도
                 nn = normalize_corp_name(name)
                 cur.execute("""
                     SELECT corp_code FROM master.companies
@@ -178,9 +231,17 @@ def match_suppliers_from_wikidata(cur) -> int:
                 if r:
                     corp_code, method, conf = r[0], "name_exact", 0.80
 
+            # auto.master_suppliers 에 등록 → supplier_id 발급.
+            supplier_id = _ensure_supplier(cur,
+                name=name, wikidata_qid=qid, country=country,
+                lei=lei, business_no=bizno,
+                source="wikidata", source_ref=qid,
+                confidence=max(conf, 0.80))
+
+            # bridge.corp_entity 에 stringified supplier_id 로 등록.
             _upsert_bridge(cur,
                 corp_code=corp_code,
-                entity_id=qid,
+                entity_id=str(supplier_id),
                 entity_type="supplier",
                 name=name,
                 wikidata_qid=qid,

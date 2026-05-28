@@ -1,0 +1,261 @@
+# (VehicleModel) -[:MANUFACTURED_AT]-> (Plant) 시드.
+#
+# PRD §10.5 / DoD #5 (BOM Level 1 안정) 보조. plants.yaml 의 :Plant 노드를 그대로
+# 참조 (code 기준). 각 매핑은 공개 IR / Wikipedia / 회사 홈페이지에 기반.
+#
+# 정책:
+#   - 매핑 1건 = (model_name_norm, plant_code, manufacturer_name, valid_from)
+#   - confidence 0.90 (공개 자료 deterministic — PRD §3.5 B 등급+).
+#   - validated_status='validated' (manual seed — `manual_curation' 출처).
+#   - 한 모델이 여러 공장에서 생산되면 같은 모델로 여러 row 작성 (manufactured_at 은
+#     many-to-many 이므로 그래프에 모두 적재).
+#
+# 주의: model_name 은 NHTSA vPIC 표기 (영문, 모든 대문자 가능) 기준. loader 가
+# auto.master_vehicle_models 와 normalize 매칭 (대소문자 무시, 공백 제거).
+
+version: 1
+last_updated: 2026-05-28
+
+mappings:
+
+  # ── 현대자동차 (HYU_ULSAN / HYU_ASAN / HYU_MONTGOMERY) ──
+  - model_name: Sonata
+    manufacturer: HYUNDAI
+    plant_code: HYU_ASAN
+    valid_from: 2019-01-01
+    notes: Asan 1 공장 — Sonata DN8 / Grandeur 라인.
+
+  - model_name: Grandeur
+    manufacturer: HYUNDAI
+    plant_code: HYU_ASAN
+    valid_from: 2022-11-01
+
+  - model_name: Avante
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2020-01-01
+    notes: Elantra 한국 명. Ulsan 3 공장.
+
+  - model_name: Elantra
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2020-01-01
+
+  - model_name: Tucson
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2020-09-01
+
+  - model_name: Santa Fe
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2018-01-01
+
+  - model_name: Santa Fe
+    manufacturer: HYUNDAI
+    plant_code: HYU_MONTGOMERY
+    valid_from: 2021-01-01
+    notes: 북미향 동시 생산.
+
+  - model_name: Ioniq 5
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2021-03-01
+
+  - model_name: Ioniq 6
+    manufacturer: HYUNDAI
+    plant_code: HYU_ASAN
+    valid_from: 2022-06-01
+
+  - model_name: Kona
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2018-01-01
+
+  - model_name: Palisade
+    manufacturer: HYUNDAI
+    plant_code: HYU_ULSAN
+    valid_from: 2018-12-01
+
+  - model_name: Staria
+    manufacturer: HYUNDAI
+    plant_code: HYU_JEONJU
+    valid_from: 2021-06-01
+    notes: Jeonju 상용 라인.
+
+  - model_name: Porter
+    manufacturer: HYUNDAI
+    plant_code: HYU_JEONJU
+    valid_from: 2004-01-01
+
+  # ── 기아 (KIA_HWASEONG / KIA_GWANGJU / KIA_WEST_POINT) ──
+  - model_name: K5
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2019-12-01
+
+  - model_name: K8
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2021-04-01
+
+  - model_name: K9
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2018-04-01
+
+  - model_name: Sorento
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2020-03-01
+
+  - model_name: Sorento
+    manufacturer: KIA
+    plant_code: KIA_WEST_POINT
+    valid_from: 2021-06-01
+
+  - model_name: Carnival
+    manufacturer: KIA
+    plant_code: KIA_GWANGJU
+    valid_from: 2020-08-01
+
+  - model_name: Sportage
+    manufacturer: KIA
+    plant_code: KIA_GWANGJU
+    valid_from: 2021-07-01
+
+  - model_name: Telluride
+    manufacturer: KIA
+    plant_code: KIA_WEST_POINT
+    valid_from: 2019-01-01
+
+  - model_name: EV6
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2021-07-01
+
+  - model_name: Niro
+    manufacturer: KIA
+    plant_code: KIA_HWASEONG
+    valid_from: 2016-06-01
+
+  - model_name: Stonic
+    manufacturer: KIA
+    plant_code: KIA_GWANGJU
+    valid_from: 2017-07-01
+
+  # ── 제네시스 (HYU_ULSAN, HYU_ASAN 라인 공유) ──
+  - model_name: G70
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2017-10-01
+
+  - model_name: G80
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2020-03-01
+
+  - model_name: G90
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2021-12-01
+
+  - model_name: GV60
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2021-10-01
+
+  - model_name: GV70
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2020-12-01
+
+  - model_name: GV80
+    manufacturer: GENESIS
+    plant_code: HYU_ULSAN
+    valid_from: 2020-01-01
+
+  # ── KG 모빌리티 (구 쌍용) ──
+  - model_name: Tivoli
+    manufacturer: KG MOBILITY
+    plant_code: KGM_PYEONGTAEK
+    valid_from: 2015-01-01
+
+  - model_name: Torres
+    manufacturer: KG MOBILITY
+    plant_code: KGM_PYEONGTAEK
+    valid_from: 2022-07-01
+
+  - model_name: Rexton
+    manufacturer: KG MOBILITY
+    plant_code: KGM_PYEONGTAEK
+    valid_from: 2017-04-01
+
+  # ── 르노코리아 ──
+  - model_name: SM6
+    manufacturer: RENAULT KOREA
+    plant_code: RNK_BUSAN
+    valid_from: 2016-03-01
+
+  - model_name: QM6
+    manufacturer: RENAULT KOREA
+    plant_code: RNK_BUSAN
+    valid_from: 2016-09-01
+
+  # ── Tesla (TES_FREMONT, TES_SHANGHAI) ──
+  - model_name: Model 3
+    manufacturer: TESLA
+    plant_code: TES_FREMONT
+    valid_from: 2017-07-01
+
+  - model_name: Model 3
+    manufacturer: TESLA
+    plant_code: TES_SHANGHAI
+    valid_from: 2019-12-01
+
+  - model_name: Model Y
+    manufacturer: TESLA
+    plant_code: TES_FREMONT
+    valid_from: 2020-03-01
+
+  - model_name: Model Y
+    manufacturer: TESLA
+    plant_code: TES_SHANGHAI
+    valid_from: 2021-01-01
+
+  - model_name: Model S
+    manufacturer: TESLA
+    plant_code: TES_FREMONT
+    valid_from: 2012-06-01
+
+  - model_name: Model X
+    manufacturer: TESLA
+    plant_code: TES_FREMONT
+    valid_from: 2015-09-01
+
+  # ── BMW / VW / Toyota (대표 1 모델만) ──
+  - model_name: 5 Series
+    manufacturer: BMW
+    plant_code: BMW_DINGOLFING
+    valid_from: 2017-02-01
+
+  - model_name: Golf
+    manufacturer: VOLKSWAGEN
+    plant_code: VW_WOLFSBURG
+    valid_from: 2008-01-01
+
+  - model_name: Corolla
+    manufacturer: TOYOTA
+    plant_code: TOY_TAKAOKA
+    valid_from: 2018-01-01
+
+  # ── Ford / GM 한국 ──
+  - model_name: F-150
+    manufacturer: FORD
+    plant_code: FORD_DEARBORN
+    valid_from: 2009-01-01
+
+  - model_name: Trailblazer
+    manufacturer: GM
+    plant_code: GMK_BUPYEONG
+    valid_from: 2019-12-01

@@ -134,18 +134,49 @@ def triage_node(state: AgentState) -> AgentState:
 
     state["target_companies"] = targets
 
+    # ── AutoGraph 도메인 entity 식별 (B17 fix) ────────────────
+    # auto / cross_domain 일 때 question 단어 단위 lookup_vehicle 로 target_vehicles /
+    # target_models / target_makes 를 채운다. 이게 없으면 plan_auto_tasks 의
+    # vehicle_spec/recall/supply_chain/compare 분기가 빈 루프로 끝남.
+    domain = str(state.get("domain") or "finance").lower()
+    if domain in ("auto", "cross_domain"):
+        try:
+            from autograph.policy import identify_auto_targets
+            identify_auto_targets(state, question=q)
+        except Exception as exc:   # noqa: BLE001
+            log.warning("[triage:auto] identify failed: %s", exc)
+
+        # auto 도메인 session carry-over — 이번 turn 에서 매칭 0 인데 이전 turn 에
+        # 차종이 있었으면 borrow (PRD §7.6.2 multi-turn 보존).
+        # prev 는 finance 분기에서 이미 session.get 으로 한 번 가져왔음 (재호출 불필요).
+        if prev:
+            if not (state.get("target_vehicles") or []) and prev.target_vehicles:
+                state["target_vehicles"] = list(prev.target_vehicles)
+                state["session_carryover"] = True
+                log.info("[triage:auto] carry-over target_vehicles: %s",
+                         state["target_vehicles"])
+            if not (state.get("target_models") or []) and prev.target_models:
+                state["target_models"] = list(prev.target_models)
+                state["session_carryover"] = True
+            if not (state.get("target_makes") or []) and prev.target_makes:
+                state["target_makes"] = list(prev.target_makes)
+
     # 이번 turn 결과를 세션에 기록 (다음 turn 의 carry-over 재료)
     if thread_id:
         year_hint = extract_year_hint(state.get("question_rewritten") or q)
         session.update(
             thread_id,
             target_companies=targets if targets else None,
+            target_vehicles=state.get("target_vehicles") or None,
+            target_models=state.get("target_models") or None,
+            target_makes=state.get("target_makes") or None,
             last_year=year_hint,
             last_question_kind=kind,
             last_question=q,
         )
 
-    log.info(f"[triage] kind={kind} targets={targets}")
+    log.info("[triage] kind=%s targets=%s vehicles=%s",
+             kind, targets, state.get("target_vehicles") or [])
     return state
 
 
@@ -193,7 +224,13 @@ def planner_node(state: AgentState) -> AgentState:
     if domain == "cross_domain":
         try:
             from autograph.policy import plan_cross_domain_tasks
-            tasks = plan_cross_domain_tasks(question=q, target_companies=targets)
+            tasks = plan_cross_domain_tasks(
+                question=q,
+                target_companies=targets,
+                target_makes=state.get("target_makes") or [],
+                target_models=state.get("target_models") or [],
+                target_vehicles=state.get("target_vehicles") or [],
+            )
             state["tasks"] = tasks
             state["task_results"] = {}
             state["plan"] = [{"tool": t["intent"], "args": t["args"],
@@ -398,34 +435,68 @@ def executor_node(state: AgentState) -> AgentState:
             evidence.extend(out or [])
 
     # ── Fallback recovery (흡수: _legacy/v1 similar_hints 핵심) ────────────
-    # 모든 도구가 빈 결과만 반환했고 search_documents 도 안 돌았으면, 일반 retrieve
-    # 시도 → 사용자에게 "정보 부족" 만 보내는 대신 회복 경로 제공.
+    # 모든 도구가 빈 결과만 반환했고 검색이 안 돌았으면, 일반 retrieve 시도 → 사용자에게
+    # "정보 부족" 만 보내는 대신 회복 경로 제공. 도메인 인식 (B20 fix):
+    #   - auto / cross_domain → autograph.tools.search_documents_auto
+    #     (manufacturer_id 메타로 finance 청크 제외 + nhtsa_* sources 한정)
+    #   - finance (default) → autonexusgraph.tools.search_documents (corp_code 키)
     if state.get("aborted_reason") != "turn_budget":
         all_empty = all(not (r.get("result")) for r in results) if results else True
-        already_searched = any(r["tool"] == "search_documents" for r in results)
+        searched_tools = {"search_documents", "search_documents_auto"}
+        already_searched = any(r["tool"] in searched_tools for r in results)
         if all_empty and not already_searched and state.get("question"):
-            log.info("[executor] all empty → fallback search_documents")
-            try:
-                fn = getattr(toolbox, "search_documents", None)
-                if fn is not None:
-                    targets = state.get("target_companies") or []
+            domain = str(state.get("domain") or "finance").lower()
+            q_text = state.get("question_rewritten") or state["question"]
+            fb_tool: str | None = None
+            fb_fn = None
+            fb_args: dict = {}
+            if domain in ("auto", "cross_domain"):
+                try:
+                    from autograph.tools import search_documents_auto as _auto_search
+                    fb_tool = "search_documents_auto"
+                    fb_fn = _auto_search
+                    mids = state.get("target_makes") or []
                     fb_args = {
-                        "query": state.get("question_rewritten") or state["question"],
+                        "query": q_text,
                         "top_k": 6,
-                        "corp_code": targets[0] if len(targets) == 1 else (targets or None),
+                        # manufacturer_id 는 정수 list 필요 — target_models 의
+                        # 모델 id 보다 manufacturer 단위가 더 fallback-friendly.
+                        # state 에 manufacturer_id 가 따로 없으니 안전하게 미지정.
                     }
-                    fb_out = fn(**fb_args)
+                    # 좁혀줄 수 있는 model_id 가 있으면 활용.
+                    if state.get("target_models"):
+                        fb_args["model_id"] = state["target_models"][0] if \
+                            len(state["target_models"]) == 1 else state["target_models"]
+                    log.info("[executor] all empty → fallback search_documents_auto "
+                             "(domain=%s, models=%s)", domain,
+                             state.get("target_models") or [])
+                except Exception as e:   # noqa: BLE001
+                    log.warning("[executor] auto fallback unavailable: %s", e)
+                    fb_fn = None
+            if fb_fn is None:   # finance 또는 auto import 실패 시 finance retrieve
+                fb_tool = "search_documents"
+                fb_fn = getattr(toolbox, "search_documents", None)
+                targets = state.get("target_companies") or []
+                fb_args = {
+                    "query": q_text,
+                    "top_k": 6,
+                    "corp_code": targets[0] if len(targets) == 1 else (targets or None),
+                }
+                log.info("[executor] all empty → fallback search_documents (finance)")
+            if fb_fn is not None:
+                try:
+                    fb_out = fb_fn(**fb_args)
                     if fb_out:
                         results.append({
-                            "tool": "search_documents",
+                            "tool": fb_tool,
                             "purpose": "fallback_recovery",
                             "args": fb_args,
                             "result": fb_out,
                         })
                         evidence.extend(fb_out)
                         state["fallback_used"] = True
-            except Exception as e:
-                log.warning(f"[executor] fallback search failed: {e}")
+                except Exception as e:   # noqa: BLE001
+                    log.warning("[executor] fallback %s failed: %s", fb_tool, e)
 
     state["tool_results"] = results
     state["evidence_chunks"] = evidence
@@ -494,13 +565,14 @@ def synthesizer_node(state: AgentState,
         from ..llm.base import get_llm_client
         from ..llm.budget_aware import budget_aware_client
         from ..llm.cost_tracker import BudgetExceeded
-        from ..config import get_settings
+        from ..config import turn_budget_for_domain
 
-        settings = get_settings()
+        domain = state.get("domain")
+        hard_limit = turn_budget_for_domain(domain)
         client = budget_aware_client(
             get_llm_client(role=llm_role),
-            caller="agent_synthesize",
-            hard_limit=settings.agent_turn_budget_usd,
+            caller=f"agent_synthesize:{str(domain or 'finance').lower()}",
+            hard_limit=hard_limit,
         )
         resp = client.chat(messages, temperature=0.2, max_tokens=1200,
                            purpose="synthesize")

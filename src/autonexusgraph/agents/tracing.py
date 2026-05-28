@@ -133,4 +133,49 @@ def reset_cache() -> None:
     _BACKEND_CACHE = None
 
 
-__all__ = ["get_trace_callbacks", "describe_backend", "reset_cache"]
+# ── 도메인 trace 태그 / metadata 헬퍼 ──────────────────────
+def tags_for_domain(domain: str | None) -> list[str]:
+    """LangGraph config['tags'] 에 들어갈 도메인 식별 태그.
+
+    Langfuse / LangSmith UI 에서 trace 필터링에 사용. autograph 분기가 발화한 turn
+    을 finance 와 분리해 모니터링 가능.
+    """
+    d = (domain or "").strip().lower() or "finance"
+    base = ["autonexusgraph", f"domain:{d}"]
+    if d == "auto":
+        base.append("autograph")
+    elif d == "cross_domain":
+        # 양쪽 모두 발화하므로 두 tag 모두 부착.
+        base.append("autograph")
+    return base
+
+
+def metadata_for_state(state: dict) -> dict:
+    """LangGraph config['metadata'] 에 합쳐질 trace metadata.
+
+    state 의 비-PII 식별자만 추출 — domain/thread_id/target 카운트.
+    재무 회사 corp_code / 자동차 variant_id 같은 raw id 는 length 만 노출.
+    """
+    if not isinstance(state, dict):
+        return {"domain": "finance"}
+    domain = str(state.get("domain") or "finance").lower()
+    md: dict = {
+        "domain": domain,
+        "n_target_companies": len(state.get("target_companies") or []),
+        "n_target_vehicles":  len(state.get("target_vehicles") or []),
+        "n_target_models":    len(state.get("target_models") or []),
+        "n_history":          len(state.get("history") or []),
+    }
+    # question_kind 가 triage 후에 채워지면 함께 노출.
+    if state.get("question_kind"):
+        md["question_kind"] = state["question_kind"]
+    return md
+
+
+__all__ = [
+    "get_trace_callbacks",
+    "describe_backend",
+    "reset_cache",
+    "tags_for_domain",
+    "metadata_for_state",
+]

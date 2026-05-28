@@ -1,0 +1,184 @@
+# 공급사 ↔ 부품(Module/Part) 매핑 시드.
+# (:Module|:Part)-[:SUPPLIED_BY]->(:Supplier) 엣지의 결정적(A-grade) 출처.
+#
+# 본 시드는 공개 정보 (KAMA / 부품사 IR / 자동차 산업 분석 자료 / Wikipedia) 기반으로
+# 한국 OEM 의 잘 알려진 공급 관계를 ~30개 수록. 잘못된 매핑이 발견되면 reviewed_status
+# 'rejected' 로 표기하거나 본 파일에서 제거.
+#
+# 각 row:
+#   supplier:        공급사 표준 이름 (auto.master_suppliers.name 또는 신규 등록)
+#   country:         ISO alpha-2 (KR / DE / JP / US / CN)
+#   wikidata_qid:    있으면 (Bridge 매칭용)
+#   components:      이 공급사가 공급하는 부품 — auto.components.canonical_name 와 매칭.
+#                    각 항목은 단순 문자열 또는 {name, system_code, customer} dict.
+#                    customer 가 명시되면 그 OEM 의 차종에만 엣지를 만든다.
+#   confidence:      0.95 기본 (manual seed = A grade).
+
+version: 1
+last_updated: 2026-05-28
+
+suppliers:
+
+  # ── 배터리 ──────────────────────────────────────────────
+  - supplier: LG에너지솔루션
+    country: KR
+    wikidata_qid: Q104839991
+    components:
+      - { name: "Battery Pack", system_code: BATTERY, customer: HYUNDAI }
+      - { name: "Battery Pack", system_code: BATTERY, customer: KIA }
+      - { name: "Battery Pack", system_code: BATTERY, customer: GM }
+      - { name: "Battery Pack", system_code: BATTERY, customer: TESLA }
+    confidence: 0.95
+
+  - supplier: 삼성SDI
+    country: KR
+    wikidata_qid: Q482588
+    components:
+      - { name: "Battery Pack", system_code: BATTERY, customer: BMW }
+      - { name: "Battery Pack", system_code: BATTERY, customer: STELLANTIS }
+    confidence: 0.95
+
+  - supplier: SK온
+    country: KR
+    wikidata_qid: Q110985063
+    components:
+      - { name: "Battery Pack", system_code: BATTERY, customer: HYUNDAI }
+      - { name: "Battery Pack", system_code: BATTERY, customer: KIA }
+      - { name: "Battery Pack", system_code: BATTERY, customer: FORD }
+    confidence: 0.95
+
+  - supplier: CATL
+    country: CN
+    wikidata_qid: Q20739186
+    components:
+      - { name: "Battery Pack", system_code: BATTERY, customer: TESLA }
+      - { name: "Battery Pack", system_code: BATTERY, customer: BMW }
+      - { name: "Battery Pack", system_code: BATTERY, customer: VOLKSWAGEN }
+    confidence: 0.95
+
+  # ── HVAC / 열관리 ──────────────────────────────────────
+  - supplier: 한온시스템
+    country: KR
+    wikidata_qid: Q19819
+    components:
+      - { name: "HVAC Compressor", system_code: HVAC, customer: HYUNDAI }
+      - { name: "HVAC Compressor", system_code: HVAC, customer: KIA }
+      - { name: "Heat Pump", system_code: HVAC, customer: HYUNDAI }
+    confidence: 0.95
+
+  # ── 브레이크 / 섀시 ────────────────────────────────────
+  - supplier: 현대모비스
+    country: KR
+    wikidata_qid: Q485612
+    components:
+      - { name: "Brake System", system_code: BRAKE, customer: HYUNDAI }
+      - { name: "Brake System", system_code: BRAKE, customer: KIA }
+      - { name: "Airbag", system_code: SAFETY, customer: HYUNDAI }
+      - { name: "Airbag", system_code: SAFETY, customer: KIA }
+      - { name: "Steering Column", system_code: STEERING, customer: HYUNDAI }
+    confidence: 0.95
+
+  - supplier: HL Mando
+    country: KR
+    wikidata_qid: Q495725
+    components:
+      - { name: "Brake System", system_code: BRAKE, customer: HYUNDAI }
+      - { name: "Brake System", system_code: BRAKE, customer: KIA }
+      - { name: "Steering", system_code: STEERING, customer: HYUNDAI }
+      - { name: "Suspension", system_code: SUSPENSION, customer: HYUNDAI }
+    confidence: 0.95
+
+  - supplier: HL Klemove
+    country: KR
+    components:
+      - { name: "Radar", system_code: ADAS, customer: HYUNDAI }
+      - { name: "Camera", system_code: ADAS, customer: KIA }
+    confidence: 0.90
+
+  # ── 타이어 ────────────────────────────────────────────
+  - supplier: 한국타이어
+    country: KR
+    wikidata_qid: Q485578
+    components:
+      - { name: "Tire", system_code: TIRES_WHEELS, customer: HYUNDAI }
+      - { name: "Tire", system_code: TIRES_WHEELS, customer: KIA }
+    confidence: 0.95
+
+  - supplier: 금호타이어
+    country: KR
+    wikidata_qid: Q1764263
+    components:
+      - { name: "Tire", system_code: TIRES_WHEELS, customer: HYUNDAI }
+      - { name: "Tire", system_code: TIRES_WHEELS, customer: KIA }
+    confidence: 0.90
+
+  # ── 전장 / 인포테인먼트 ─────────────────────────────
+  - supplier: LG전자 VS사업본부
+    country: KR
+    wikidata_qid: Q150661
+    components:
+      - { name: "Infotainment", system_code: INFOTAINMENT, customer: HYUNDAI }
+      - { name: "Infotainment", system_code: INFOTAINMENT, customer: KIA }
+      - { name: "Cluster", system_code: INFOTAINMENT, customer: HYUNDAI }
+    confidence: 0.90
+
+  - supplier: 삼성디스플레이
+    country: KR
+    wikidata_qid: Q1132541
+    components:
+      - { name: "Display", system_code: INFOTAINMENT, customer: HYUNDAI }
+    confidence: 0.85
+
+  # ── 와이어 / 커넥터 ──────────────────────────────────
+  - supplier: 경신
+    country: KR
+    components:
+      - { name: "Wire Harness", system_code: ELECTRICAL, customer: HYUNDAI }
+      - { name: "Wire Harness", system_code: ELECTRICAL, customer: KIA }
+    confidence: 0.90
+
+  - supplier: LS EV Korea
+    country: KR
+    components:
+      - { name: "Wire Harness", system_code: ELECTRICAL, customer: HYUNDAI }
+    confidence: 0.85
+
+  # ── 글로벌 Tier1 ──────────────────────────────────────
+  - supplier: Bosch
+    country: DE
+    wikidata_qid: Q234021
+    components:
+      - { name: "Brake System", system_code: BRAKE, customer: BMW }
+      - { name: "ABS Module", system_code: BRAKE, customer: VOLKSWAGEN }
+      - { name: "Fuel Injector", system_code: FUEL_SYSTEM, customer: BMW }
+    confidence: 0.95
+
+  - supplier: Continental
+    country: DE
+    wikidata_qid: Q165722
+    components:
+      - { name: "Tire", system_code: TIRES_WHEELS, customer: BMW }
+      - { name: "ADAS Sensor", system_code: ADAS, customer: VOLKSWAGEN }
+    confidence: 0.95
+
+  - supplier: Denso
+    country: JP
+    wikidata_qid: Q26927
+    components:
+      - { name: "HVAC Compressor", system_code: HVAC, customer: TOYOTA }
+      - { name: "Fuel Injector", system_code: FUEL_SYSTEM, customer: TOYOTA }
+    confidence: 0.95
+
+  - supplier: Magna International
+    country: CA
+    wikidata_qid: Q637316
+    components:
+      - { name: "Body Stamping", system_code: BODY, customer: BMW }
+    confidence: 0.90
+
+  - supplier: Aisin
+    country: JP
+    wikidata_qid: Q420948
+    components:
+      - { name: "Automatic Transmission", system_code: POWERTRAIN, customer: TOYOTA }
+    confidence: 0.95

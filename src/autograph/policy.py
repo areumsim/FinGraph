@@ -149,10 +149,19 @@ def plan_auto_tasks(*, question: str,
                 _next_id("g_"), "graph", "list_recalls_affecting",
                 {"variant_id": vid, "limit": 30},
             ))
+            # 리콜 전단계 조사도 함께 — 잠재적 신호 보강.
+            tasks.append(make_task(
+                _next_id("g_"), "graph", "list_investigations_affecting",
+                {"variant_id": vid, "limit": 20},
+            ))
         for mid in target_models:
             tasks.append(make_task(
                 _next_id("g_"), "graph", "list_recalls_affecting",
                 {"model_id": mid, "limit": 30},
+            ))
+            tasks.append(make_task(
+                _next_id("g_"), "graph", "list_investigations_affecting",
+                {"model_id": mid, "limit": 20},
             ))
         tasks.append(make_task(
             _next_id("r_"), "research", "search_documents_auto",
@@ -206,11 +215,15 @@ def plan_auto_tasks(*, question: str,
 
 def plan_cross_domain_tasks(*, question: str,
                              target_companies: list[str] | None = None,
-                             target_makes: list[str] | None = None) -> list[dict]:
-    """cross_domain 시나리오 1: 자동차 graph → bridge → finance SQL.
+                             target_makes: list[str] | None = None,
+                             target_models: list[int] | None = None,
+                             target_vehicles: list[int] | None = None,
+                             ) -> list[dict]:
+    """cross_domain — 자동차 graph ↔ bridge ↔ finance/SEC.
 
-    target_makes 가 있으면 manufacturer entity → corp_code 변환을 bridge 로 시도하고,
-    그 후 finance get_revenue 를 의존 task 로 건다.
+    - target_companies (DART corp_code) → bridge.corp_to_entity + finance get_revenue.
+    - target_models 의 OEM (글로벌) → bridge.entity_to_sec_cik + get_oem_financials_sec.
+    - NHTSA recall 문서 검색은 항상 포함.
     """
     from autonexusgraph.agents.dag import make_task
 
@@ -222,25 +235,45 @@ def plan_cross_domain_tasks(*, question: str,
         tid += 1
         return f"x{prefix}{tid}"
 
-    # finance 측 target_companies 가 있으면 그 회사의 매핑 entity 도 함께 본다.
+    year = _extract_year(question)
+
+    # ── finance 측 (DART corp_code) — bridge + 매출 ──────────
     for cc in target_companies or []:
         tasks.append(make_task(
             _next_id("br_"), "sql", "bridge_corp_to_entity",
             {"corp_code": cc, "entity_type": "manufacturer"},
         ))
+        tasks.append(make_task(
+            _next_id("sql_"), "sql", "get_revenue",
+            {"corp_code": cc, "year": year},
+        ))
 
-    # 자동차 문서 + 리콜 검색
+    # ── 자동차 측 target_models → SEC EDGAR OEM 재무 (글로벌) ──
+    # model_id 자체는 manufacturer 가 아니지만, target_models 는 식별된 OEM의 model.
+    # bridge_entity_to_sec_cik 를 호출해 supervisor 가 manufacturer_id 추출.
+    # 실제 financials 조회는 get_oem_financials_sec — manufacturer_id 단위.
+    seen_mfr: set[int] = set()
+    for mid in target_models or []:
+        # MVP: model_id 그대로는 manufacturer 아니지만 후속 supervisor 가 join.
+        # 본 PR 에서는 target_models 가 들어오면 그 모델의 manufacturer 정보를
+        # supervisor 가 lookup_vehicle 결과로부터 보강.
+        seen_mfr.add(int(mid))
+    for mfr_id in seen_mfr:
+        tasks.append(make_task(
+            _next_id("sql_"), "sql", "bridge_entity_to_sec_cik",
+            {"entity_id": str(mfr_id), "entity_type": "manufacturer"},
+        ))
+        tasks.append(make_task(
+            _next_id("sql_"), "sql", "get_oem_financials_sec",
+            {"manufacturer_id": mfr_id, "fiscal_period": "FY",
+             "year_min": year, "year_max": year, "limit": 10},
+        ))
+
+    # ── 자동차 문서 + 리콜 검색 (항상) ─────────────────────────
     tasks.append(make_task(
         _next_id("r_"), "research", "search_documents_auto",
         {"query": question, "top_k": 6, "source": "nhtsa_recall"},
     ))
-
-    # finance SQL (회사 재무) — target_companies 있으면.
-    for cc in target_companies or []:
-        tasks.append(make_task(
-            _next_id("sql_"), "sql", "get_revenue",
-            {"corp_code": cc, "year": _extract_year(question)},
-        ))
 
     return tasks
 
@@ -250,6 +283,85 @@ def _extract_year(q: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# ── 자동차 도메인 entity 식별 (triage 보조) ─────────────────
+def identify_auto_targets(state: dict, *,
+                          question: str | None = None,
+                          max_per_word: int = 2,
+                          max_total_vehicles: int = 5,
+                          max_total_models: int = 5,
+                          max_total_makes: int = 5) -> None:
+    """auto/cross_domain triage 보조 — question 단어 단위로 lookup_vehicle 호출.
+
+    상위 hits 의 variant_id / model_id / mfr_name 를 ``state["target_vehicles"]`` /
+    ``state["target_models"]`` / ``state["target_makes"]`` 에 in-place 채움.
+
+    DB 미가용·tools 모듈 import 실패 등은 무음 실패 (best-effort). 매칭 0 이면 빈 리스트.
+
+    triage_node 가 sanitize/rewrite 후의 question 을 명시적으로 넘겨야 안전 —
+    state 의 question 키만 보면 sanitize 전 원문일 수 있다.
+    """
+    try:
+        from .tools.spec import lookup_vehicle
+    except Exception:   # noqa: BLE001 — DB/import 모두 graceful
+        return
+
+    q = question if question is not None else (
+        state.get("question_rewritten") or state.get("question") or ""
+    )
+    if not q:
+        return
+    year = _extract_year(q)
+
+    target_vehicles: list[int] = []
+    target_models: list[int] = []
+    target_makes: list[str] = []
+    seen_v: set[int] = set()
+    seen_m: set[int] = set()
+    seen_mk: set[str] = set()
+
+    # 단어 단위 lookup — 자유 단어 ('리콜', '사례') 는 자연스럽게 매칭 0.
+    for word in q.split():
+        if len(word) < 2:
+            continue
+        if (len(target_vehicles) >= max_total_vehicles
+                and len(target_models) >= max_total_models
+                and len(target_makes) >= max_total_makes):
+            break
+        try:
+            hits = lookup_vehicle(word, year=year, limit=max_per_word)
+        except Exception:   # noqa: BLE001
+            continue
+        for h in hits:
+            vid = h.get("variant_id")
+            mid = h.get("model_id")
+            mfr = h.get("mfr_name")
+            if vid is not None:
+                try:
+                    vid_i = int(vid)
+                except (TypeError, ValueError):
+                    vid_i = None
+                if vid_i is not None and vid_i not in seen_v and len(target_vehicles) < max_total_vehicles:
+                    target_vehicles.append(vid_i)
+                    seen_v.add(vid_i)
+            if mid is not None:
+                try:
+                    mid_i = int(mid)
+                except (TypeError, ValueError):
+                    mid_i = None
+                if mid_i is not None and mid_i not in seen_m and len(target_models) < max_total_models:
+                    target_models.append(mid_i)
+                    seen_m.add(mid_i)
+            if mfr:
+                mfr_s = str(mfr)
+                if mfr_s not in seen_mk and len(target_makes) < max_total_makes:
+                    target_makes.append(mfr_s)
+                    seen_mk.add(mfr_s)
+
+    state["target_vehicles"] = target_vehicles
+    state["target_models"]   = target_models
+    state["target_makes"]    = target_makes
+
+
 __all__ = [
     "AutoQuestionKind",
     "classify_question_auto",
@@ -257,4 +369,5 @@ __all__ = [
     "route_domain",
     "plan_auto_tasks",
     "plan_cross_domain_tasks",
+    "identify_auto_targets",
 ]

@@ -1,0 +1,104 @@
+# 차량 시스템 분류 (Level 3) — :System 노드의 SSOT.
+#
+# code 는 SCREAMING_SNAKE_CASE 로 통일. AI-Hub 로더의 소문자 코드 ('powertrain' 등) 는
+# 본 파일의 alias_codes 로 매핑되어 같은 :System 노드를 가리킨다.
+
+version: 1
+last_updated: 2026-05-28
+
+systems:
+
+  - code: POWERTRAIN
+    name: 파워트레인
+    description: 엔진, 변속기, 구동축 등 동력 발생·전달 시스템
+    alias_codes: [powertrain, ENGINE, TRANSMISSION, engine, transmission]
+
+  - code: ELECTRIC_DRIVE
+    name: 전기 구동계
+    description: 모터, 인버터, 감속기 등 EV 동력계
+    alias_codes: [ED, electric_drive]
+
+  - code: BATTERY
+    name: 배터리 시스템
+    description: 고전압 배터리 팩, BMS, 냉각, 충전 인터페이스
+    alias_codes: [battery, BAT_PACK, BMS]
+
+  - code: BRAKE
+    name: 제동 시스템
+    description: 브레이크, ABS, 제동력 분배
+    alias_codes: [brake, BRAKES]
+
+  - code: STEERING
+    name: 조향 시스템
+    description: 스티어링 컬럼, 기어박스, MDPS
+    alias_codes: [steering]
+
+  - code: SUSPENSION
+    name: 현가 시스템
+    description: 댐퍼, 스프링, 부싱, 서브프레임
+    alias_codes: [suspension]
+
+  - code: SAFETY
+    name: 안전 시스템
+    description: 에어백, 시트벨트, 충돌 감지
+    alias_codes: [safety, AIRBAG, SRS]
+
+  - code: ADAS
+    name: 첨단 운전자 보조 시스템
+    description: AEB, LKA, ACC, BSD, 차선 유지
+    alias_codes: [adas]
+
+  - code: BODY
+    name: 차체
+    description: 외판, 프레임, 도어, 그릴, 범퍼
+    alias_codes: [body, EXTERIOR]
+
+  - code: INTERIOR
+    name: 인테리어
+    description: 시트, 대시보드, 트림
+    alias_codes: [interior]
+
+  - code: ELECTRICAL
+    name: 전장 시스템
+    description: 배선, 커넥터, 퓨즈, ECU, 인포테인먼트 모듈
+    alias_codes: [electrical, ELECTRIC]
+
+  - code: LIGHTING
+    name: 등화 시스템
+    description: 헤드램프, 테일램프, 시그널
+    alias_codes: [lighting, LAMP]
+
+  - code: HVAC
+    name: 공조 시스템
+    description: 에어컨, 히터, 송풍기
+    alias_codes: [hvac, AC]
+
+  - code: FUEL_SYSTEM
+    name: 연료 시스템
+    description: 연료탱크, 펌프, 인젝터
+    alias_codes: [fuel, FUEL]
+
+  - code: EXHAUST
+    name: 배기 시스템
+    description: 배기 매니폴드, 촉매, 머플러
+    alias_codes: [exhaust]
+
+  - code: CHASSIS
+    name: 섀시
+    description: 프레임, 휠 베어링, 액슬
+    alias_codes: [chassis, FRAME]
+
+  - code: TIRES_WHEELS
+    name: 타이어·휠
+    description: 타이어, 휠, TPMS
+    alias_codes: [tires, wheels, TPMS]
+
+  - code: INFOTAINMENT
+    name: 인포테인먼트
+    description: 헤드유닛, 디스플레이, 텔레매틱스
+    alias_codes: [infotainment]
+
+  - code: UNKNOWN
+    name: 미분류
+    description: 분류 불명 — 사람 검토 필요
+    alias_codes: [unknown, ""]

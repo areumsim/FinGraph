@@ -1,4 +1,4 @@
-"""AI Hub 라벨 → auto.components + vec.chunks + Neo4j CONTAINS_COMPONENT.
+"""AI Hub 라벨 → auto.components(level=4) + vec.chunks + Neo4j CONTAINS_COMPONENT.
 
 대상 데이터셋:
 - 71347 자율주행 고장진단 — 모터-감속기 + 배터리 결함 분류 (IONIQ/KONA/NIRO)
@@ -8,9 +8,13 @@
 (차량_모델, 컴포넌트, 결함_클래스, 라벨_수) 통계로 변환. 통계는 **이벤트 (recalls/
 complaints) 가 아니므로** `auto.events_*` 에 적재하지 않고 다음 3 곳에 분산:
 
-1. `auto.components` — Motor-Reducer / Battery / 도어 / 범퍼 / ... (UPSERT)
-2. `vec.chunks` — `(model × component)` 1 chunk 의 검색 가능 텍스트 요약
-3. Neo4j — `(:VehicleModel)-[:CONTAINS_COMPONENT {source,confidence,validated_status}]->(:Component)`
+1. `auto.components` (level=4 Module) — Motor-Reducer / Battery / 도어 / 범퍼 / ... (UPSERT)
+2. `vec.chunks` — `(model × module)` 1 chunk 의 검색 가능 텍스트 요약
+3. Neo4j — `(:VehicleModel)-[:CONTAINS_COMPONENT {source,confidence,validated_status,snapshot_year}]->(:Module)`
+
+적재 규약:
+- :Module 노드 MERGE key 는 ``{id: ...}`` (auto.components.component_id) — neo4j_init 제약과 일치.
+- 공용 ``get_driver()`` + UNWIND $rows 배치 적재.
 
 CLI:
     python -m autograph.loaders.load_auto_aihub --dataset 71347
@@ -29,15 +33,17 @@ import argparse
 import collections
 import json
 import logging
-import os
 import tarfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from autonexusgraph.config import get_settings
+from autonexusgraph.db.neo4j import get_driver
 from autonexusgraph.db.postgres import get_connection
 from autonexusgraph.ingestion._common import normalize_corp_name
+
+from ..ontology import canonical_system_code
 
 
 log = logging.getLogger(__name__)
@@ -189,18 +195,27 @@ def aggregate_578(root: Path) -> dict[str, dict[str, int]]:
 
 # ── PG/Neo4j 적재 ───────────────────────────────────────────────
 def _upsert_component(cur, *, canonical_name: str, system_code: str,
-                      aliases: list[str], source: str) -> int:
+                      aliases: list[str], source: str,
+                      level: int = 4) -> int:
+    """auto.components UPSERT (default level=4 Module).
+
+    system_code 는 canonical_system_code() 로 SCREAMING_SNAKE_CASE 정규화 후 저장 —
+    AI-Hub raw 'powertrain' 같은 표기를 'POWERTRAIN' 로 통일해 :System 노드와 매칭.
+    """
     name_norm = normalize_corp_name(canonical_name)
+    sys_code  = canonical_system_code(system_code)
     cur.execute("""
         INSERT INTO auto.components
           (canonical_name, name_norm, system_code, aliases, source,
-           confidence, validated_status)
-        VALUES (%s, %s, %s, %s, %s, 1.000, 'verified')
+           confidence, validated_status, level, snapshot_year)
+        VALUES (%s, %s, %s, %s, %s, 1.000, 'verified', %s,
+                EXTRACT(YEAR FROM now())::SMALLINT)
         ON CONFLICT (canonical_name, system_code) DO UPDATE SET
           aliases = (SELECT array_agg(DISTINCT a) FROM unnest(
-                       auto.components.aliases || EXCLUDED.aliases) a)
+                       auto.components.aliases || EXCLUDED.aliases) a),
+          level = COALESCE(auto.components.level, EXCLUDED.level)
         RETURNING component_id
-    """, (canonical_name, name_norm, system_code, aliases, source))
+    """, (canonical_name, name_norm, sys_code, aliases, source, level))
     return cur.fetchone()[0]
 
 
@@ -289,52 +304,52 @@ def _resolve_model(cur, model_name: str) -> tuple[int | None, int | None, str | 
 
 
 # ── Neo4j ───────────────────────────────────────────────────────
-def _neo4j_merge_component_edges(stats: list[dict]) -> int:
-    """각 row = {model_id, component_id, component_name, system_code, source, confidence}.
+# 모듈 노드 MERGE + (VehicleModel)-[:CONTAINS_COMPONENT]->(Module) 엣지 한 번에.
+# AI-Hub 'IONIQ' 는 vPIC 'Ioniq', 'Ioniq 5', 'Ioniq 6' 다수에 매칭될 수 있어 LHS 가
+# 여러 모델일 수 있다 (그래서 MERGE rel 가 모델당 1 엣지를 생성).
+_MERGE_AIHUB_EDGES = """
+UNWIND $rows AS r
+MERGE (c:Module {id: r.component_id})
+  ON CREATE SET c.name = r.name, c.system_code = r.system_code,
+                c.source = r.source
+  ON MATCH  SET c.name = coalesce(c.name, r.name),
+                c.system_code = coalesce(c.system_code, r.system_code)
+WITH c, r
+OPTIONAL MATCH (m:VehicleModel)
+ WHERE toLower(m.name) = toLower(r.model_name)
+    OR toLower(m.name) STARTS WITH toLower(r.model_name)
+WITH c, r, m WHERE m IS NOT NULL
+MERGE (m)-[rel:CONTAINS_COMPONENT]->(c)
+  ON CREATE SET rel.source_id = r.source,
+                rel.source_type = 'aihub',
+                rel.extraction_method = 'deterministic',
+                rel.confidence_score = r.confidence,
+                rel.validated_status = 'verified',
+                rel.snapshot_year = r.snapshot_year
+  ON MATCH  SET rel.confidence_score =
+                  CASE WHEN r.confidence > rel.confidence_score
+                       THEN r.confidence ELSE rel.confidence_score END,
+                rel.snapshot_year = coalesce(rel.snapshot_year, r.snapshot_year)
+RETURN count(rel) AS edges
+"""
 
-    Cypher: VehicleModel + Component 노드 MERGE, CONTAINS_COMPONENT 엣지 MERGE.
+
+def _neo4j_merge_component_edges(rows: list[dict], *, batch: int = 200) -> int:
+    """각 row = {model_name, component_id, name, system_code, source, confidence, snapshot_year}.
+
+    공용 get_driver() + UNWIND 배치 적재. 노드는 :Module, 엣지는 :CONTAINS_COMPONENT.
     """
-    import os
-    from neo4j import GraphDatabase
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
-    uri = os.environ.get("NEO4J_URI")
-    user = os.environ.get("NEO4J_USER", "neo4j")
-    pwd = os.environ.get("NEO4J_PASSWORD", "")
-    if not uri:
-        log.warning("[neo4j] NEO4J_URI 미설정 — skip")
+    if not rows:
         return 0
-    driver = GraphDatabase.driver(uri, auth=(user, pwd))
+    driver = get_driver()
     n = 0
     with driver.session() as s:
-        for row in stats:
-            # VehicleModel 은 model_id 속성이 없을 수 있어 name prefix 매칭.
-            # AI Hub 'IONIQ' → vPIC 'Ioniq', 'Ioniq 5', 'Ioniq 6' 등 모두 잡고
-            # 각 매칭 모델에 component 엣지 부여.
-            result = s.run("""
-                MERGE (c:Component {component_id: $component_id})
-                  ON CREATE SET c.name=$name, c.system_code=$system_code,
-                                c.source=$source
-                  ON MATCH  SET c.name=$name, c.system_code=$system_code
-                WITH c
-                MATCH (m:VehicleModel)
-                 WHERE toLower(m.name) = toLower($model_name)
-                    OR toLower(m.name) STARTS WITH toLower($model_name)
-                MERGE (m)-[r:CONTAINS_COMPONENT]->(c)
-                  ON CREATE SET r.source=$source, r.confidence_score=$confidence,
-                                r.validated_status='verified',
-                                r.snapshot_year=$snapshot_year
-                  ON MATCH  SET r.confidence_score=
-                                  CASE WHEN $confidence > r.confidence_score
-                                       THEN $confidence ELSE r.confidence_score END
-                RETURN count(r) AS edges_per_component
-            """, row).single()
-            if result:
-                n += result["edges_per_component"]
-    driver.close()
+        for i in range(0, len(rows), batch):
+            chunk = rows[i:i + batch]
+            result = s.run(_MERGE_AIHUB_EDGES, rows=chunk)
+            # UNWIND 안에서 RETURN count(rel) 은 row 마다 한 행을 yield — 합산.
+            for rec in result:
+                n += int(rec["edges"] or 0)
     return n
 
 
@@ -406,11 +421,13 @@ def load_71347(*, dry_run: bool = False) -> LoadStats:
                 cur.execute("ROLLBACK TO SAVEPOINT sp_chunk")
                 stats.errors.append(f"71347 chunk {uniq}: {e}")
 
-            # 3) Neo4j edge 후보 — name prefix 매칭 (AI Hub 'IONIQ' → vPIC 'Ioniq', 'Ioniq 5'...)
+            # 3) Neo4j edge 후보 — name prefix 매칭 (AI Hub 'IONIQ' → vPIC 'Ioniq', 'Ioniq 5'...).
+            # system_code 는 canonical (POWERTRAIN/BATTERY/...) 로 통일.
             neo4j_rows.append({
                 "model_name": model,  # 'IONIQ' / 'KONA' / 'NIRO' — Cypher 가 prefix 매칭
                 "component_id": int(cid),
-                "name": canonical, "system_code": system_code,
+                "name": canonical,
+                "system_code": canonical_system_code(system_code),
                 "source": "aihub_71347", "confidence": 1.0,
                 "snapshot_year": 2022,
             })

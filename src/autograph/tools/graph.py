@@ -73,6 +73,24 @@ def list_components(*,
     return []
 
 
+# ── 시스템 계층 (derived CONTAINS_SYSTEM) ───────────────────
+def list_systems_of_model(model_id: int, *,
+                          limit: int = DEFAULT_LIMIT) -> list[dict]:
+    """차종이 보유한 시스템 (Level 3) 목록. derive_contains_system 가 채운 엣지."""
+    return _exec("auto_systems_of_model",
+                 model_id=int(model_id), limit=_cap(limit))
+
+
+def list_models_with_system(system_code: str, *,
+                            limit: int = DEFAULT_LIMIT) -> list[dict]:
+    """시스템 코드로 해당 시스템을 보유한 차종들 역검색."""
+    if not system_code:
+        return []
+    return _exec("auto_models_with_system",
+                 system_code=str(system_code).strip(),
+                 limit=_cap(limit))
+
+
 # ── 리콜 ────────────────────────────────────────────────────
 def list_recalls_affecting(*,
                            variant_id: int | None = None,
@@ -91,6 +109,33 @@ def list_recalls_affecting(*,
                      year_min=year_min, year_max=year_max,
                      limit=_cap(limit))
     return []
+
+
+# ── 조사 (NHTSA ODI Investigations) ─────────────────────────
+def list_investigations_affecting(*,
+                                  variant_id: int | None = None,
+                                  model_id: int | None = None,
+                                  year_min: int | None = None,
+                                  year_max: int | None = None,
+                                  limit: int = DEFAULT_LIMIT) -> list[dict]:
+    """차종/트림에 대한 NHTSA 결함 조사 (리콜 전 단계). recalls 의 자매."""
+    if variant_id is not None:
+        return _exec("auto_investigations_by_variant",
+                     variant_id=int(variant_id),
+                     year_min=year_min, year_max=year_max,
+                     limit=_cap(limit))
+    if model_id is not None:
+        return _exec("auto_investigations_by_model",
+                     model_id=int(model_id),
+                     year_min=year_min, year_max=year_max,
+                     limit=_cap(limit))
+    return []
+
+
+def get_investigation_recall_chain(investigation_id: int) -> list[dict]:
+    """조사 → 후속 리콜 종결 (campno 가 매칭됐을 때만 비어있지 않음)."""
+    return _exec("auto_investigation_recall_chain",
+                 investigation_id=int(investigation_id))
 
 
 # ── 공급사 ↔ 부품 ────────────────────────────────────────────
@@ -120,7 +165,11 @@ __all__ = [
     "lookup_vehicle",
     "lookup_supplier",
     "list_components",
+    "list_systems_of_model",
+    "list_models_with_system",
     "list_recalls_affecting",
+    "list_investigations_affecting",
+    "get_investigation_recall_chain",
     "get_suppliers_of_component",
     "get_vehicles_using_component",
     "find_vehicle_component_paths",

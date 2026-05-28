@@ -177,21 +177,30 @@ def _get_langgraph_app():
     return _LG_APP
 
 
-def _make_run_config(thread_id: str) -> dict:
+def _make_run_config(thread_id: str, *, state: dict | None = None) -> dict:
+    """LangGraph app.invoke 에 넘길 config — checkpoint + tracing + 도메인 태그.
+
+    state 가 주어지면 ``tags`` / ``metadata`` 에 domain·target 카운트 부착 (PRD §7.5.11)
+    → Langfuse/LangSmith UI 에서 autograph turn 을 finance 와 분리 모니터링 가능.
+    """
     cfg: dict = {"configurable": {"thread_id": thread_id or "default"}}
     try:
-        from .tracing import get_trace_callbacks
+        from .tracing import get_trace_callbacks, metadata_for_state, tags_for_domain
         cbs = get_trace_callbacks()
         if cbs:
             cfg["callbacks"] = cbs
+        if state is not None:
+            domain = state.get("domain") if isinstance(state, dict) else None
+            cfg["tags"] = tags_for_domain(domain)
+            cfg["metadata"] = metadata_for_state(state)
     except Exception as exc:   # noqa: BLE001
-        log.debug("tracing callbacks skip: %s", exc)
+        log.debug("tracing config skip: %s", exc)
     return cfg
 
 
 def _run_with_langgraph(state: AgentState) -> AgentState:
     app = _get_langgraph_app()
-    config = _make_run_config(state.get("thread_id") or "default")
+    config = _make_run_config(state.get("thread_id") or "default", state=state)
     result = app.invoke(state, config=config)
     return result   # type: ignore[return-value]
 
@@ -250,7 +259,7 @@ def run_agent_stream(question: str, *,
 
 def _stream_with_langgraph(state: AgentState) -> Iterator[tuple[str, AgentState]]:
     app = _get_langgraph_app()
-    config = _make_run_config(state.get("thread_id") or "default")
+    config = _make_run_config(state.get("thread_id") or "default", state=state)
     final_state: AgentState = state
     interrupted = False
     for update in app.stream(state, config=config, stream_mode="updates"):
