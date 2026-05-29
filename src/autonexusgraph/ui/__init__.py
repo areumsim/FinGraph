@@ -1,4 +1,4 @@
-"""FinGraph Streamlit Web UI.
+"""AutoNexusGraph Streamlit Web UI.
 
 실행:
     pip install streamlit

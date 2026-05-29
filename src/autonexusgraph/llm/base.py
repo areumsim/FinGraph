@@ -30,12 +30,23 @@ class TokenUsage:
     model: str = ""
 
     def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        """집계 — 동일 모델만 합산을 권장. 다른 모델 혼합 시 model='mixed'.
+
+        cost tracking 의 model 별 정확도를 위해 호출자가 가능하면 모델별로
+        TokenUsage 를 분리해서 집계할 것. 본 메서드는 안전한 default 만 제공.
+        """
+        if not self.model:
+            merged_model = other.model
+        elif not other.model or self.model == other.model:
+            merged_model = self.model
+        else:
+            merged_model = "mixed"
         return TokenUsage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
             total_tokens=self.total_tokens + other.total_tokens,
             cost_usd=self.cost_usd + other.cost_usd,
-            model=self.model or other.model,
+            model=merged_model,
         )
 
 

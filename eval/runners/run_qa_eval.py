@@ -147,13 +147,51 @@ class CostBudget:
 
 
 # ─── adapter 실행 (resume 지원) ─────────────────────────────
+def _record_from_response(qid: str, adapter_name: str, resp) -> dict:
+    return {
+        "qid": qid,
+        "adapter": adapter_name,
+        "answer": resp.answer,
+        "refused": resp.refused,
+        "refusal_reason": resp.refusal_reason,
+        "answer_entities": resp.answer_entities,
+        "evidence": [dataclasses.asdict(e) for e in resp.evidence],
+        "cypher": resp.cypher,
+        "question_kind": resp.question_kind,
+        "answer_confidence": resp.answer_confidence,
+        "data_completeness": resp.data_completeness,
+        "latency_sec": resp.latency_sec,
+        "cost_usd": resp.cost_usd,
+        "tokens_used": resp.tokens_used,
+        "diagnostics": resp.diagnostics,
+        "raw": resp.raw,
+    }
+
+
+def _query_one(adapter, row: dict):
+    from eval.adapters.base import AgentResponse
+    try:
+        return adapter.query(row["question"], domain=row.get("domain"))
+    except Exception as exc:  # noqa: BLE001
+        return AgentResponse(
+            refused=True,
+            refusal_reason=f"exception:{type(exc).__name__}:{exc}",
+        )
+
+
 def run_adapter_on_gold(
     adapter,
     gold_rows: list[dict],
     out_path: Path,
     budget: CostBudget | None = None,
+    *,
+    workers: int = 1,
 ) -> list[dict]:
-    """row 별로 adapter.query() → out_path 에 실시간 append. 이미 처리된 qid skip."""
+    """row 별로 adapter.query() → out_path 에 실시간 append. 이미 처리된 qid skip.
+
+    workers > 1 — ThreadPoolExecutor 로 병렬 호출 (LLM 호출 I/O 바운드).
+    budget halt 는 main thread 에서만 → 미리 submit 된 작업은 완료까지 대기.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     done: set[str] = set()
     if out_path.exists():
@@ -165,44 +203,12 @@ def run_adapter_on_gold(
             except Exception:
                 pass
 
-    total = len(gold_rows)
-    for i, row in enumerate(gold_rows, 1):
-        qid = row["qid"]
-        if qid in done:
-            continue
-        if budget is not None and budget.halted:
-            break
+    pending = [r for r in gold_rows if r["qid"] not in done]
+    total = len(pending)
 
+    def _consume(qid: str, resp, i: int) -> bool:
         print(f"  [{adapter.name}] {i}/{total} qid={qid}", flush=True)
-        from eval.adapters.base import AgentResponse
-        try:
-            resp = adapter.query(row["question"], domain=row.get("domain"))
-        except Exception as exc:  # noqa: BLE001
-            resp = AgentResponse(
-                refused=True,
-                refusal_reason=f"exception:{type(exc).__name__}:{exc}",
-            )
-
-        rec = {
-            "qid": qid,
-            "adapter": adapter.name,
-            "answer": resp.answer,
-            "refused": resp.refused,
-            "refusal_reason": resp.refusal_reason,
-            "answer_entities": resp.answer_entities,
-            "evidence": [dataclasses.asdict(e) for e in resp.evidence],
-            "cypher": resp.cypher,
-            "question_kind": resp.question_kind,
-            "answer_confidence": resp.answer_confidence,
-            "data_completeness": resp.data_completeness,
-            "latency_sec": resp.latency_sec,
-            "cost_usd": resp.cost_usd,
-            "tokens_used": resp.tokens_used,
-            "diagnostics": resp.diagnostics,
-            "raw": resp.raw,
-        }
-        append_jsonl(out_path, rec)
-
+        append_jsonl(out_path, _record_from_response(qid, adapter.name, resp))
         if budget is not None:
             budget.record(tokens_used=resp.tokens_used, cost_usd=resp.cost_usd)
             reason = budget.check_limit()
@@ -210,7 +216,26 @@ def run_adapter_on_gold(
                 budget.halted = True
                 budget.halt_reason = reason
                 print(f"  [budget] 중단: {reason}", file=sys.stderr, flush=True)
+                return False
+        return True
+
+    if workers <= 1:
+        for i, row in enumerate(pending, 1):
+            if budget is not None and budget.halted:
                 break
+            if not _consume(row["qid"], _query_one(adapter, row), i):
+                break
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_query_one, adapter, row): (i + 1, row)
+                       for i, row in enumerate(pending)}
+            for fut in as_completed(futures):
+                i, row = futures[fut]
+                if budget is not None and budget.halted:
+                    continue   # 결과 폐기 (이미 호출됨), submit 된 것은 자연 종료.
+                if not _consume(row["qid"], fut.result(), i):
+                    break
 
     return load_jsonl(out_path)
 
@@ -478,6 +503,8 @@ def main() -> int:
     parser.add_argument("--enable-judge", action="store_true")
 
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--workers", type=int, default=1,
+                        help="adapter 별 동시 LLM 호출 수 (I/O 바운드 — 4~8 권장).")
     parser.add_argument("--force", action="store_true",
                         help="resume 무시 — 기존 predictions 삭제 후 재실행")
     args = parser.parse_args()
@@ -521,7 +548,8 @@ def main() -> int:
             max_tokens=args.max_llm_tokens,
             max_cost=args.max_cost_usd,
         )
-        pred_rows = run_adapter_on_gold(adapter, gold_rows, pred_path, budget=budget)
+        pred_rows = run_adapter_on_gold(adapter, gold_rows, pred_path,
+                                          budget=budget, workers=args.workers)
         budgets[ad_name] = budget.as_dict()
 
         per_q = compute_per_question_metrics(

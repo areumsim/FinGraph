@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     law_api_key: str = ""
 
     # SEC EDGAR — 키 불필요 (User-Agent 만 필요)
-    sec_user_agent: str = "FinGraph-Research/0.1 (ifkbn@kolon.com)"
+    sec_user_agent: str = "AutoNexusGraph-Research/0.1 (ifkbn@kolon.com)"
 
     # === 수집 ===
     ingest_tickers: str = "KOSPI200,KOSDAQ100"

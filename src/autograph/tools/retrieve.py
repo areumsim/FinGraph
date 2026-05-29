@@ -16,7 +16,7 @@ DEFAULT_TOPK = 8
 HARD_TOPK = 50
 
 # 자동차 청크의 source 컨벤션 (build_chunks_auto 와 일치).
-AUTO_SOURCES = ("nhtsa_recall", "nhtsa_complaint", "wikipedia_auto")
+AUTO_SOURCES = ("nhtsa_recall", "nhtsa_complaint", "nhtsa_tsb", "wikipedia_auto")
 
 
 def _cap(k: int | None) -> int:

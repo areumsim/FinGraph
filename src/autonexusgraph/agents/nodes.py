@@ -143,8 +143,16 @@ def triage_node(state: AgentState) -> AgentState:
         try:
             from autograph.policy import identify_auto_targets
             identify_auto_targets(state, question=q)
+        except ImportError as exc:
+            log.warning("[triage:auto] autograph 패키지 미설치 — auto 도메인 fallback 으로 finance 처리됨: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"autograph_import_failed:{type(exc).__name__}"
+            )
         except Exception as exc:   # noqa: BLE001
             log.warning("[triage:auto] identify failed: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"auto_identify_failed:{type(exc).__name__}"
+            )
 
         # auto 도메인 session carry-over — 이번 turn 에서 매칭 0 인데 이전 turn 에
         # 차종이 있었으면 borrow (PRD §7.6.2 multi-turn 보존).
@@ -216,8 +224,18 @@ def planner_node(state: AgentState) -> AgentState:
             state["plan"] = [{"tool": t["intent"], "args": t["args"],
                               "purpose": f"{t['agent']}:{t['intent']}"} for t in tasks]
             log.info("[planner:auto] tasks=%d", len(tasks))
+        except ImportError as exc:
+            log.warning("[planner:auto] autograph 패키지 미설치: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"autograph_import_failed:{type(exc).__name__}"
+            )
+            state["tasks"] = []
+            state["plan"] = []
         except Exception as exc:  # noqa: BLE001
             log.warning("[planner:auto] failed — fallback to research: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"auto_plan_failed:{type(exc).__name__}"
+            )
             state["tasks"] = []
             state["plan"] = []
         return _planner_cost_gate(state, kind, targets, len(state.get("tasks") or []))
@@ -236,8 +254,18 @@ def planner_node(state: AgentState) -> AgentState:
             state["plan"] = [{"tool": t["intent"], "args": t["args"],
                               "purpose": f"{t['agent']}:{t['intent']}"} for t in tasks]
             log.info("[planner:cross_domain] tasks=%d", len(tasks))
+        except ImportError as exc:
+            log.warning("[planner:cross_domain] autograph 패키지 미설치: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"autograph_import_failed:{type(exc).__name__}"
+            )
+            state["tasks"] = []
+            state["plan"] = []
         except Exception as exc:  # noqa: BLE001
             log.warning("[planner:cross_domain] failed: %s", exc)
+            state.setdefault("safety_signals", []).append(
+                f"cross_domain_plan_failed:{type(exc).__name__}"
+            )
             state["tasks"] = []
             state["plan"] = []
         return _planner_cost_gate(state, kind, targets, len(state.get("tasks") or []))
@@ -345,12 +373,36 @@ def planner_node(state: AgentState) -> AgentState:
     return _planner_cost_gate(state, kind, targets, len(tasks))
 
 
-def _planner_cost_gate(state: "AgentState", kind: str, targets: list,
-                       n_tasks: int) -> "AgentState":
-    """planner 의 cost-approval 게이트 — finance/auto/cross_domain 모두 공통.
+def _handle_cost_resume(state: "AgentState") -> bool:
+    """이미 보낸 cost_approval 의 사용자 응답을 처리.
 
-    PRD §7.5.6 HITL. replan 중이거나 이미 승인된 turn 은 skip.
+    Returns:
+        True  — 응답 처리됨 (turn 진행 또는 중단 결정 완료)
+        False — 보낸 적이 없거나 응답 미수신
     """
+    from .interrupts import coerce_cost_response
+
+    pi = state.get("pending_interrupt") or {}
+    resp = state.get("interrupt_response")
+    if not (pi.get("kind") == "cost_approval"
+            and resp is not None
+            and not state.get("interrupt_handled")):
+        return False
+
+    approved = coerce_cost_response(resp)
+    state["interrupt_handled"] = True
+    state["pending_interrupt"] = {}
+    if not approved:
+        state["aborted_reason"] = "cost_rejected"
+        log.info("[planner] cost_approval 거절 — turn 종료")
+    else:
+        log.info("[planner] cost_approval 승인 (resume) — 진행")
+    return True
+
+
+def _request_cost_approval(state: "AgentState", kind: str, targets: list,
+                            n_tasks: int, domain: str) -> None:
+    """새로운 cost approval 요청 — replan 첫 turn 일 때만."""
     from .cost_estimator import needs_cost_approval
     from .interrupts import (
         InterruptUnavailable,
@@ -359,47 +411,49 @@ def _planner_cost_gate(state: "AgentState", kind: str, targets: list,
         request_interrupt,
     )
 
-    pi = state.get("pending_interrupt") or {}
-    resp = state.get("interrupt_response")
-    domain = str(state.get("domain") or "finance")
+    need, est = needs_cost_approval(state)
+    if not need:
+        return
 
-    if pi.get("kind") == "cost_approval" and resp is not None and not state.get("interrupt_handled"):
-        approved = coerce_cost_response(resp)
+    summary = (
+        f"도메인: {domain}, 질문 유형: {kind}, 대상: {len(targets)}, "
+        f"task: {n_tasks}개, 모델: {est.model} "
+        f"(replan 최대 {est.replan_factor}회 포함)"
+    )
+    payload = make_cost_approval_payload(
+        estimated_cost_usd=est.estimated_cost_usd,
+        plan_summary=summary,
+        thread_id=state.get("thread_id") or "",
+    )
+    state["pending_interrupt"] = dict(payload)
+    try:
+        approved = coerce_cost_response(request_interrupt(payload))
         state["interrupt_handled"] = True
         state["pending_interrupt"] = {}
         if not approved:
             state["aborted_reason"] = "cost_rejected"
             log.info("[planner] cost_approval 거절 — turn 종료")
-            return state
-        log.info("[planner] cost_approval 승인 (resume) — 진행")
-    elif not state.get("n_replans") and not state.get("interrupt_handled"):
-        need, est = needs_cost_approval(state)
-        if need:
-            summary = (
-                f"도메인: {domain}, 질문 유형: {kind}, 대상: {len(targets)}, "
-                f"task: {n_tasks}개, 모델: {est.model} "
-                f"(replan 최대 {est.replan_factor}회 포함)"
-            )
-            payload = make_cost_approval_payload(
-                estimated_cost_usd=est.estimated_cost_usd,
-                plan_summary=summary,
-                thread_id=state.get("thread_id") or "",
-            )
-            state["pending_interrupt"] = dict(payload)
-            try:
-                resp2 = request_interrupt(payload)
-                approved = coerce_cost_response(resp2)
-                state["interrupt_handled"] = True
-                state["pending_interrupt"] = {}
-                if not approved:
-                    state["aborted_reason"] = "cost_rejected"
-                    log.info("[planner] cost_approval 거절 — turn 종료")
-            except InterruptUnavailable:
-                state.setdefault("safety_signals", []).append(
-                    f"cost_approval_auto_passed:${est.estimated_cost_usd:.4f}"
-                )
-                log.warning("[planner] interrupt 미지원 — 추정 비용 $%.4f 자동 통과",
-                            est.estimated_cost_usd)
+    except InterruptUnavailable:
+        state.setdefault("safety_signals", []).append(
+            f"cost_approval_auto_passed:${est.estimated_cost_usd:.4f}"
+        )
+        log.warning("[planner] interrupt 미지원 — 추정 비용 $%.4f 자동 통과",
+                    est.estimated_cost_usd)
+
+
+def _planner_cost_gate(state: "AgentState", kind: str, targets: list,
+                       n_tasks: int) -> "AgentState":
+    """planner 의 cost-approval 게이트 — finance/auto/cross_domain 모두 공통.
+
+    PRD §7.5.6 HITL. replan 중이거나 이미 승인된 turn 은 skip.
+    """
+    domain = str(state.get("domain") or "finance")
+
+    if _handle_cost_resume(state):
+        return state
+
+    if not state.get("n_replans") and not state.get("interrupt_handled"):
+        _request_cost_approval(state, kind, targets, n_tasks, domain)
     return state
 
 

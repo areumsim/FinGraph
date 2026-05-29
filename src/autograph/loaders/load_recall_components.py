@@ -213,6 +213,13 @@ def load_recall_components(*, dry_run: bool = False, batch: int = 500) -> MatchS
     if edges:
         driver = get_driver()
         with driver.session() as session:
+            # B1 fix — Module 노드가 없으면 MATCH (c {id:...}) 실패 → RECALL_OF 0.
+            # 적재 직전 PG components → Neo4j :Module 동기화 한 패스.
+            from .load_supplier_edges import sync_modules_to_neo4j
+            comp_ids = sorted({int(e["component_id"]) for e in edges
+                                if e.get("component_id")})
+            n_synced = sync_modules_to_neo4j(conn, session, comp_ids, batch=batch)
+            log.info("[recall→comp] synced %d Module nodes to Neo4j", n_synced)
             n = run_batched(session, _MERGE_RECALL_OF, edges, batch=batch)
             stats.edges_written = n
 

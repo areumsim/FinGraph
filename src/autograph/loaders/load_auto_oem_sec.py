@@ -71,6 +71,31 @@ log = logging.getLogger(__name__)
 
 _CONFIDENCE = 0.95   # PRD §3.5 A 등급 (SEC 공식 XBRL).
 
+
+# SEC CIK → vPIC manufacturer_id 직접 매핑.
+# vPIC 의 GetAllMakes 가 SEC entity_name 과 표기가 달라서 normalize 만으로는
+# 못 잡는 케이스. region/branding 차이 (Stellantis N.V. vs "Stellantis North America")
+# 또는 vPIC 에 holding 자체가 미등록 (GM 은 Chevrolet/GMC/Cadillac/Buick brand 로만 등록).
+_SEC_CIK_TO_VPIC_MFR_ID: dict[str, int] = {
+    "0001605484": 1000000138,   # Stellantis N.V. → vPIC "Stellantis North America"
+}
+
+# vPIC 에 holding 자체가 없어서 manual mfr 신규 발급 대상.
+# {sec_cik: (name, country)}.
+_SEC_MANUAL_MFR_SEED: dict[str, tuple[str, str]] = {
+    "0001467858": ("GENERAL MOTORS COMPANY", "USA"),
+}
+
+# Tier1 부품사 — manufacturer 가 아니라 supplier 로 bridge.
+# 본 loader 는 OEM facts 도 받고 supplier bridge 도 보강. supplier facts 는
+# auto.oem_financials_sec 에 manufacturer_id=NULL 로 그대로 적재됨 (분석 측에서
+# bridge 통해 supplier 와 join).
+# {sec_cik: supplier_name}.
+_SEC_TIER1_SUPPLIER_SEED: dict[str, str] = {
+    "0001521332": "APTIV PLC",
+    # Magna 는 CIK 0001019975 — raw 미수집. 추후 추가.
+}
+
 # us-gaap / ifrs-full 화이트리스트 — 본 PR 의 핵심 fact 11종.
 # concept 명은 SEC taxonomy 표준. 동일 의미의 두 concept 가 있는 경우 둘 다 받음
 # (Revenues vs RevenueFromContractWithCustomerExcludingAssessedTax) — 분석 측에서 선택.
@@ -122,14 +147,99 @@ def _iter_cik_files() -> Iterable[tuple[str, Path]]:
         yield cik10, p
 
 
+def _ensure_tier1_supplier(cur, *, name: str, cik10: str) -> int:
+    """Tier1 supplier 발급 — auto.master_suppliers 에 없으면 신규.
+
+    supplier_id 시퀀스 충돌 회피를 위해 MAX+1 패턴 사용.
+    """
+    from autonexusgraph.ingestion._common import normalize_corp_name as _ncn
+    norm = _ncn(name)
+    cur.execute("""
+        SELECT supplier_id FROM auto.master_suppliers
+         WHERE name_norm = %s LIMIT 1
+    """, (norm,))
+    r = cur.fetchone()
+    if r:
+        return int(r[0])
+
+    cur.execute("""
+        SELECT GREATEST(COALESCE(MAX(supplier_id), 0), 9000000) + 1
+          FROM auto.master_suppliers
+    """)
+    new_id = int(cur.fetchone()[0])
+    cur.execute("""
+        INSERT INTO auto.master_suppliers
+            (supplier_id, name, name_norm, country, source, source_ref,
+             confidence, validated_status)
+        VALUES (%s, %s, %s, NULL, 'manual_sec_cik', %s, 0.95, 'reviewed')
+    """, (new_id, name, norm, f"CIK{cik10}"))
+    log.info("[load:sec_oem] manual supplier 신규 발급: id=%d %s (CIK%s)",
+             new_id, name, cik10)
+    return new_id
+
+
+def _upsert_bridge_supplier(cur, *, supplier_id: int, sec_cik: str,
+                              entity_name: str | None) -> bool:
+    """Tier1 supplier 의 bridge upsert — entity_type='supplier'."""
+    cur.execute("""
+        INSERT INTO bridge.corp_entity
+          (corp_code, entity_id, entity_type, name, sec_cik,
+           match_method, confidence_score, reviewed_status)
+        VALUES (NULL, %s, 'supplier', %s, %s,
+                'sec_cik', 1.000, 'reviewed')
+        ON CONFLICT (COALESCE(corp_code, ''), entity_type, entity_id) DO UPDATE SET
+          sec_cik           = COALESCE(EXCLUDED.sec_cik, bridge.corp_entity.sec_cik),
+          name              = COALESCE(EXCLUDED.name, bridge.corp_entity.name),
+          confidence_score  = GREATEST(bridge.corp_entity.confidence_score,
+                                       EXCLUDED.confidence_score),
+          updated_at        = now()
+    """, (str(supplier_id), entity_name, sec_cik))
+    return True
+
+
+def _ensure_manual_manufacturer(cur, *, name: str, country: str | None,
+                                  cik10: str) -> int:
+    """vPIC 미등록 OEM (예: GM holding) 의 manual mfr 발급.
+
+    이미 같은 name_norm 의 manual mfr 이 있으면 그것 반환. 없으면 신규.
+    manufacturer_id 는 (MAX, 10^9) + 1 패턴 — vPIC 자동 발급 ID (1~10^6 와 region
+    1000000000~) 와 충돌 안 함.
+    """
+    norm = normalize_corp_name(name)
+    cur.execute("""
+        SELECT manufacturer_id FROM auto.master_manufacturers
+         WHERE name_norm = %s AND source = 'manual_sec_cik' LIMIT 1
+    """, (norm,))
+    r = cur.fetchone()
+    if r:
+        return int(r[0])
+
+    cur.execute("""
+        SELECT GREATEST(COALESCE(MAX(manufacturer_id), 0), 2000000000) + 1
+          FROM auto.master_manufacturers
+    """)
+    new_id = int(cur.fetchone()[0])
+    cur.execute("""
+        INSERT INTO auto.master_manufacturers
+            (manufacturer_id, name, name_norm, country, source, source_ref,
+             confidence, validated_status)
+        VALUES (%s, %s, %s, %s, 'manual_sec_cik', %s, 0.95, 'reviewed')
+    """, (new_id, name, norm, country, f"CIK{cik10}"))
+    log.info("[load:sec_oem] manual mfr 신규 발급: id=%d %s (CIK%s)",
+             new_id, name, cik10)
+    return new_id
+
+
 def _resolve_manufacturer_id(cur, *, entity_name: str,
                               cik10: str) -> int | None:
     """SEC entity_name → auto.master_manufacturers.manufacturer_id 매칭.
 
-    1) name_norm 정확 매칭 → 사용.
-    2) ", Inc." / ", Corporation" / " Motor Company" / " Motors" / " Corp" 등 trim 후 매칭.
-    3) bridge.corp_entity 에 이미 sec_cik 로 등록돼 있으면 그 manufacturer_id 사용.
-    실패 → None (사용자가 vpic 적재 후 재시도).
+    0) bridge 에 이미 매핑 있으면 사용.
+    1) _SEC_CIK_TO_VPIC_MFR_ID alias 매핑.
+    2) name_norm 정확 매칭.
+    3) ", Inc." / ", Corporation" / " Motor Company" / " Motors" / " Corp" 등 trim 후 매칭.
+    4) _SEC_MANUAL_MFR_SEED 에 있으면 manual mfr 발급.
+    실패 → None.
     """
     # 0) bridge 에 이미 매핑 있나?
     cur.execute("""
@@ -141,6 +251,10 @@ def _resolve_manufacturer_id(cur, *, entity_name: str,
     r = cur.fetchone()
     if r:
         return int(r[0])
+
+    # 1) alias dict (region 분리, branding 차이 등).
+    if cik10 in _SEC_CIK_TO_VPIC_MFR_ID:
+        return _SEC_CIK_TO_VPIC_MFR_ID[cik10]
 
     if not entity_name:
         return None
@@ -181,6 +295,13 @@ def _resolve_manufacturer_id(cur, *, entity_name: str,
         r = cur.fetchone()
         if r:
             return int(r[0])
+
+    # 4) vPIC 미등록 holding (예: GM) — manual mfr 신규 발급.
+    if cik10 in _SEC_MANUAL_MFR_SEED:
+        manual_name, manual_country = _SEC_MANUAL_MFR_SEED[cik10]
+        return _ensure_manual_manufacturer(
+            cur, name=manual_name, country=manual_country, cik10=cik10,
+        )
 
     return None
 
@@ -267,6 +388,16 @@ def _process_cik_file(cur, path: Path, stats: LoadStats) -> None:
             stats.bridge_rows_upserted += 1
         except Exception as e:   # noqa: BLE001
             stats.errors.append(f"bridge {cik10}: {e}")
+    elif cik10 in _SEC_TIER1_SUPPLIER_SEED:
+        # Tier1 부품사 (예: Aptiv) — entity_type='supplier' 로 bridge.
+        sup_name = _SEC_TIER1_SUPPLIER_SEED[cik10]
+        try:
+            sup_id = _ensure_tier1_supplier(cur, name=sup_name, cik10=cik10)
+            _upsert_bridge_supplier(cur, supplier_id=sup_id,
+                                     sec_cik=cik10, entity_name=entity_name)
+            stats.bridge_rows_upserted += 1
+        except Exception as e:   # noqa: BLE001
+            stats.errors.append(f"bridge_supplier {cik10}: {e}")
     else:
         stats.bridge_rows_unmatched += 1
         log.warning("[load:sec_oem] CIK%s (%s) — manufacturer 매칭 실패. "

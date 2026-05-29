@@ -17,14 +17,17 @@ import pytest
 def _force_fallback_chain_for_graph_tests(request, monkeypatch):
     """graph/stream/smoke 테스트는 폴백 체인 강제.
 
-    예외: ``test_runtime_branch_is_either_langgraph_or_fallback`` 은 환경 분기
-    자체를 검증하므로 그대로 둔다.
+    예외:
+    1. ``test_runtime_branch_is_either_langgraph_or_fallback`` — 환경 분기 자체 검증.
+    2. ``@pytest.mark.integration`` 마커 — 실제 LangGraph round-trip 검증 의도.
     """
     mod = request.module.__name__
     if not any(key in mod for key in ("test_graph_smoke", "test_stream")):
         return
     if request.node.name == "test_runtime_branch_is_either_langgraph_or_fallback":
         return
+    if request.node.get_closest_marker("integration"):
+        return   # integration 마커 — 실제 LangGraph 검증.
     import autonexusgraph.agents.graph as g
     monkeypatch.setattr(g, "_HAS_LANGGRAPH", False)
     monkeypatch.setattr(g, "_LG_APP", None)

@@ -25,8 +25,8 @@ WIKI_BASE_KO = "https://ko.wikipedia.org"
 WIKI_BASE_EN = "https://en.wikipedia.org"
 
 USER_AGENT = (
-    "FinGraph-Research/0.1 "
-    "(https://github.com/areumsim/FinGraph; ifkbn@kolon.com) "
+    "AutoNexusGraph-Research/0.1 "
+    "(https://github.com/areumsim/AutoNexusGraph; ifkbn@kolon.com) "
     "Korean-finance GraphRAG ingestion bot"
 )
 

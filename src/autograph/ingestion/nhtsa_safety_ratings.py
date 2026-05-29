@@ -56,18 +56,45 @@ def _http_get(url: str, params: dict | None = None) -> dict:
 
 
 def fetch_safety_ratings(make: str, model: str, year: int) -> dict:
-    """단일 (make, model, year) 조합 NCAP 등급. 빈 결과여도 raw 보존."""
+    """단일 (make, model, year) 조합 NCAP 등급. **2단계**:
+        1) /SafetyRatings/modelyear/.../make/.../model/...  → VehicleId 리스트만
+        2) /SafetyRatings/VehicleId/{id}                    → 실제 등급 detail
+    각 Results 항목에 detail 을 inline merge 한 뒤 raw 저장.
+    """
     settings = get_auto_settings()
-    url = (
-        f"{settings.nhtsa_api_base_url}/SafetyRatings/"
-        f"modelyear/{year}/make/{make}/model/{model}"
-    )
-    data = _http_get(url)
+    base = settings.nhtsa_api_base_url
+    list_url = f"{base}/SafetyRatings/modelyear/{year}/make/{make}/model/{model}"
+    listing = _http_get(list_url)
+    results = listing.get("Results") or []
+
+    # 각 VehicleId 의 detail 호출 + merge.
+    enriched: list[dict] = []
+    for row in results:
+        vid = row.get("VehicleId")
+        merged = dict(row)
+        if vid is not None:
+            try:
+                detail = _http_get(f"{base}/SafetyRatings/VehicleId/{vid}")
+                # detail.Results 의 첫 row 가 실제 등급 dict.
+                dres = (detail.get("Results") or [None])[0] or {}
+                # listing 의 VehicleDescription/VehicleId 유지, detail 의 모든 등급 필드 덮어쓰기.
+                for k, v in dres.items():
+                    if k not in merged or merged[k] in (None, ""):
+                        merged[k] = v
+            except Exception as e:   # noqa: BLE001
+                log.warning("[safety] VehicleId=%s detail 실패: %s", vid, e)
+        enriched.append(merged)
+
+    out = {
+        "Count": listing.get("Count"),
+        "Message": listing.get("Message"),
+        "Results": enriched,
+    }
     rel = f"{make}/{model}/{year}.json"
-    save_raw(_SOURCE, rel, data)
-    n = len(data.get("Results") or [])
-    log.info("[safety] %s %s %s -> %d rated trims", make, model, year, n)
-    return data
+    save_raw(_SOURCE, rel, out)
+    log.info("[safety] %s %s %s -> %d rated trims (with detail)",
+             make, model, year, len(enriched))
+    return out
 
 
 def ingest_make_year(make: str, year: int, *,

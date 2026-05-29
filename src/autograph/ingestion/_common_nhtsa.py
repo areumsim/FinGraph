@@ -26,6 +26,12 @@ def nhtsa_http_get(url: str,
 
     호출자가 본인의 ``RateLimiter`` 를 주입해 모듈별 (vpic 5 req/sec, recalls/complaints
     4 req/sec) 독립 제어. 헤더는 AutoSettings.wikidata_user_agent (UA 공통).
+
+    중요 — NHTSA Recalls/Complaints API 400 의 특이 동작:
+        HTTP 400 임에도 body 는 `{"Count":0,"Message":"Results returned successfully",
+        "results":[]}` 인 경우가 매우 흔하다 (해당 make/model/year 에 결과 없음의 의미).
+        이를 에러로 처리하면 정상 "결과 없음" 케이스가 56% 까지 실패로 카운트됨 (실측).
+        → 400 응답이지만 JSON body 가 정상 형식이면 그대로 반환.
     """
     settings = get_auto_settings()
     headers = {"User-Agent": settings.wikidata_user_agent}
@@ -33,6 +39,16 @@ def nhtsa_http_get(url: str,
     def _do() -> dict[str, Any]:
         with httpx.Client(timeout=timeout, headers=headers) as client:
             r = client.get(url, params=params)
+            if r.status_code == 400:
+                # NHTSA "결과 없음" 으로 400 + JSON body 보내는 케이스 흡수.
+                try:
+                    body = r.json()
+                except Exception:   # noqa: BLE001
+                    body = None
+                if isinstance(body, dict) and (
+                    "Count" in body or "results" in body or "Results" in body
+                ):
+                    return body
             r.raise_for_status()
             return r.json()
 

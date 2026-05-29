@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from autonexusgraph.agents.dag import make_task
 from autonexusgraph.agents.workers import (
     calculator_worker,
@@ -100,6 +102,11 @@ def test_sql_disallowed_intent_skipped():
 
 
 # ── Calculator ──────────────────────────────────────────────
+# numexpr 강제 (eval fallback 제거 후) — 미설치 환경에서는 expr 평가 테스트 skip.
+_numexpr = pytest.importorskip("numexpr",
+                                reason="calculator_worker 가 numexpr 필요")
+
+
 def test_calculator_basic_expr():
     task = make_task("c1", "calculator", "eval", {"expr": "1 + 2 * 3"})
     state = _make_state([task])

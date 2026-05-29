@@ -135,14 +135,24 @@ def _investigation_type(action_no: str | None) -> str | None:
     return pref if pref in _INV_TYPE_PREFIXES else None
 
 
+# 154k row 의 FLAT_INV 에서 같은 (make, model, year) 가 반복 등장 — in-process cache
+# 가 PG round-trip 대부분 차단. process-level 캐시 (loader 단일 실행 단위).
+_RESOLVE_CACHE: dict[tuple, tuple[int | None, int | None, int | None]] = {}
+
+
 def _resolve_targets(cur, *, make: str, model: str, year: int | None
                      ) -> tuple[int | None, int | None, int | None]:
     """(make, model, year) → (manufacturer_id, model_id, variant_id) 단일 LEFT JOIN.
 
-    load_auto_pg._resolve_make_model_variant 패턴 재사용 — model_year NULL 도 OK.
+    in-process cache — 동일 입력 반복 호출 시 PG round-trip skip.
     """
     if not make:
         return None, None, None
+    mk_norm = normalize_corp_name(make)
+    md_norm = normalize_corp_name(model) if model else None
+    key = (mk_norm, md_norm, year)
+    if key in _RESOLVE_CACHE:
+        return _RESOLVE_CACHE[key]
     cur.execute("""
         SELECT mm.manufacturer_id, m.model_id, v.variant_id
           FROM auto.master_manufacturers mm
@@ -154,15 +164,16 @@ def _resolve_targets(cur, *, make: str, model: str, year: int | None
            AND v.model_year = %s::int
          WHERE mm.name_norm = %s
          LIMIT 1
-    """, (
-        normalize_corp_name(model) if model else None,
-        year,
-        normalize_corp_name(make),
-    ))
+    """, (md_norm, year, mk_norm))
     row = cur.fetchone()
-    if not row:
-        return None, None, None
-    return row[0], row[1], row[2]
+    out = (row[0], row[1], row[2]) if row else (None, None, None)
+    _RESOLVE_CACHE[key] = out
+    return out
+
+
+def clear_resolve_cache() -> None:
+    """테스트·재실행용 — process-level cache 비우기."""
+    _RESOLVE_CACHE.clear()
 
 
 # ── Neo4j MERGE Cypher ─────────────────────────────────────
@@ -339,36 +350,58 @@ def _upsert_pg(cur, row: dict[str, str], stats: LoadStats) -> tuple[bool, dict] 
     return inserted, payload
 
 
-def load_investigations(*, dry_run: bool = False, batch: int = 500) -> LoadStats:
+def load_investigations(*, dry_run: bool = False, batch: int = 500,
+                        makes_filter: list[str] | None = None,
+                        commit_every: int = 1000) -> LoadStats:
+    """FLAT_INV.zip → PG + Neo4j.
+
+    Args:
+        makes_filter: 지정 시 해당 make (대문자) row 만 처리. PRD MVP 범위 시 4 OEM
+                       만 필요 — 154k row → 24k row (15%) 로 축소.
+        commit_every: row 단위 commit 빈도. SAVEPOINT 오버헤드 회피 + 진행률 visible.
+    """
     stats = LoadStats()
     zip_path = _inv_root() / "FLAT_INV.zip"
     if not zip_path.exists():
         log.warning("[load:inv] FLAT_INV.zip 없음 — ingestion 먼저 실행: %s", zip_path)
         return stats
 
+    filter_set: set[str] | None = None
+    if makes_filter:
+        filter_set = {m.strip().upper() for m in makes_filter}
+        log.info("[load:inv] make filter active: %s", sorted(filter_set))
+
     conn = get_connection()
     payloads: list[dict] = []
+    since_commit = 0
 
     with conn.cursor() as cur:
         for row in _iter_inv_rows(zip_path):
             stats.rows_seen += 1
-            cur.execute("SAVEPOINT sp_inv")
+            # ── target make filter ────────────────────────
+            if filter_set is not None:
+                row_make = (row.get("MAKE") or "").strip().upper()
+                if row_make not in filter_set:
+                    continue
             try:
                 out = _upsert_pg(cur, row, stats)
                 if out is None:
-                    cur.execute("RELEASE SAVEPOINT sp_inv")
                     continue
                 inserted, payload = out
-                cur.execute("RELEASE SAVEPOINT sp_inv")
                 if inserted:
                     stats.rows_inserted += 1
                 else:
                     stats.rows_updated += 1
                 payloads.append(payload)
+                since_commit += 1
+                # batched commit — durability + progress visible.
+                if since_commit >= commit_every:
+                    conn.commit()
+                    since_commit = 0
             except Exception as e:   # noqa: BLE001
-                cur.execute("ROLLBACK TO SAVEPOINT sp_inv")
+                conn.rollback()
                 stats.rows_errors += 1
-                if len(stats.errors) < 20:    # 너무 많이 누적 안 함
+                if len(stats.errors) < 20:
                     stats.errors.append(
                         f"{row.get('NHTSA_ACTION_NUMBER','?')}: {e}"
                     )
@@ -411,13 +444,25 @@ def load_investigations(*, dry_run: bool = False, batch: int = 500) -> LoadStats
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="autograph.loaders.load_auto_investigations")
-    ap.add_argument("--batch", type=int, default=500)
+    ap.add_argument("--batch", type=int, default=500,
+                    help="Neo4j MERGE batch 단위")
+    ap.add_argument("--commit-every", type=int, default=1000,
+                    help="PG row 단위 commit 빈도")
+    ap.add_argument("--makes", default=None,
+                    help="콤마 구분 OEM 필터 (예: HYUNDAI,KIA,GENESIS,TESLA). "
+                         "지정 안 하면 전체 154k row 처리.")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=args.log_level,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    load_investigations(dry_run=args.dry_run, batch=args.batch)
+
+    makes_filter = None
+    if args.makes:
+        makes_filter = [m.strip() for m in args.makes.split(",") if m.strip()]
+    load_investigations(dry_run=args.dry_run, batch=args.batch,
+                         makes_filter=makes_filter,
+                         commit_every=args.commit_every)
 
 
 if __name__ == "__main__":

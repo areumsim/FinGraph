@@ -33,7 +33,7 @@ from ..db.postgres import get_pool
 log = logging.getLogger(__name__)
 
 
-app = FastAPI(title="FinGraph Agent API", version="0.1")
+app = FastAPI(title="AutoNexusGraph Agent API", version="0.1")
 
 
 # ── Request/Response 모델 ───────────────────────────────────

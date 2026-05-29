@@ -77,25 +77,23 @@ def test_compare_companies_invalid_metric():
 
 
 def test_compare_companies_sorts_desc(mock_conn):
-    """다중 회사 시 None 은 뒤로, 값은 내림차순."""
+    """다중 회사 시 None 은 뒤로, 값은 내림차순. 단일 PG round-trip 패턴."""
     from autonexusgraph.tools.financials import compare_companies
 
-    # get_company_info 와 get_revenue 둘 다 호출됨 — 호출 횟수에 따라 다른 응답
+    # C3 fix: compare_companies 가 fetchall 2회 (회사명 + 지표).
     call_log = []
-    def side_effect():
-        call_log.append(1)
-        # 3 companies × (company_info → revenue) = 6 calls
-        # 각각 fetchone 한 번씩
-        return [
-            ("A", "Aco", "001", "KOSPI", "100", "ind", None, True, {}),  # info 1
-            ("매출액", 200, None, "CFS", "IS", "11011"),                       # rev 1
-            ("B", "Bco", "002", "KOSPI", "100", "ind", None, True, {}),  # info 2
-            ("매출액", 500, None, "CFS", "IS", "11011"),                       # rev 2
-            ("C", "Cco", "003", "KOSPI", "100", "ind", None, True, {}),  # info 3
-            None,                                                          # rev 3 (없음)
-        ][len(call_log) - 1]
 
-    mock_conn.fetchone.side_effect = side_effect
+    def fetchall_side():
+        call_log.append(1)
+        if len(call_log) == 1:
+            return [("A", "Aco"), ("B", "Bco"), ("C", "Cco")]
+        return [
+            ("A", "매출액", 200),
+            ("B", "매출액", 500),
+            ("C", None, None),
+        ]
+
+    mock_conn.fetchall.side_effect = fetchall_side
     rows = compare_companies(["A", "B", "C"], 2023, "revenue")
     assert [r["name"] for r in rows] == ["Bco", "Aco", "Cco"]
     assert rows[0]["value"] == 500

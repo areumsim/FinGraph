@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+# calculator worker 가 numexpr 강제 (M7) — 미설치 시 전체 supervisor 테스트 skip.
+pytest.importorskip("numexpr", reason="supervisor 테스트가 calculator 호출")
+
 from autonexusgraph.agents.dag import make_task
 from autonexusgraph.agents.supervisor import (
     sup_send_directives,

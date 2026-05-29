@@ -156,29 +156,69 @@ def get_balance_sheet_item(
 
 # ── 비교·집계 ────────────────────────────────────────────────────────
 
+_METRIC_ACCOUNTS: dict[str, tuple[str, ...]] = {
+    "revenue":          _REVENUE_ACCOUNTS,
+    "operating_income": _OP_INCOME_ACCOUNTS,
+    "net_income":       _NET_INCOME_ACCOUNTS,
+}
+
+
 def compare_companies(
     corp_codes: list[str], year: int, metric: str = "revenue", fs_div: str = "CFS",
 ) -> list[dict]:
-    """여러 회사 단일 지표 비교 (정렬 내림차순)."""
-    fn = {
-        "revenue": get_revenue,
-        "operating_income": get_operating_income,
-        "net_income": get_net_income,
-    }.get(metric)
-    if fn is None:
+    """여러 회사 단일 지표 비교 (정렬 내림차순).
+
+    단일 PG round-trip — corp_codes ARRAY 로 names + 금액을 한 번에 조회.
+    """
+    accounts = _METRIC_ACCOUNTS.get(metric)
+    if accounts is None:
         raise ValueError(f"unknown metric: {metric}. 가능: revenue/operating_income/net_income")
+    if not corp_codes:
+        return []
+
+    conn = get_connection()
+    with conn.cursor() as cur:
+        # 1) 회사명 일괄 조회.
+        cur.execute("""
+            SELECT corp_code, corp_name FROM master.companies
+             WHERE corp_code = ANY(%s)
+        """, (list(corp_codes),))
+        name_by_cc = {r[0]: r[1] for r in cur.fetchall()}
+
+        # 2) 각 corp_code 의 첫 매칭 계정 (ord 우선) 한 번에 — LATERAL.
+        cur.execute("""
+            SELECT cc, account_nm, value FROM (
+                SELECT cc,
+                       (SELECT account_nm FROM fin.financials f
+                         WHERE f.corp_code = cc AND f.bsns_year = %s
+                           AND f.fs_div = %s AND f.sj_div = 'IS'
+                           AND f.account_nm = ANY(%s)
+                           AND f.thstrm_amount IS NOT NULL
+                         ORDER BY ord NULLS LAST LIMIT 1) AS account_nm,
+                       (SELECT thstrm_amount FROM fin.financials f
+                         WHERE f.corp_code = cc AND f.bsns_year = %s
+                           AND f.fs_div = %s AND f.sj_div = 'IS'
+                           AND f.account_nm = ANY(%s)
+                           AND f.thstrm_amount IS NOT NULL
+                         ORDER BY ord NULLS LAST LIMIT 1) AS value
+                  FROM UNNEST(%s::text[]) AS cc
+            ) t
+        """, (year, fs_div, list(accounts),
+              year, fs_div, list(accounts),
+              list(corp_codes)))
+        fact_by_cc = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+    conn.commit()
 
     results: list[dict] = []
     for cc in corp_codes:
-        info = get_company_info(cc)
-        val = fn(cc, year, fs_div)
+        account_nm, val = fact_by_cc.get(cc, (None, None))
         results.append({
-            "corp_code": cc,
-            "name": info["name"] if info else None,
-            "value": val["value"] if val else None,
-            "account_nm": val["account_nm"] if val else None,
-            "year": year,
-            "metric": metric,
+            "corp_code":  cc,
+            "name":       name_by_cc.get(cc),
+            "value":      int(val) if isinstance(val, (int, Decimal)) else val,
+            "account_nm": account_nm,
+            "year":       year,
+            "metric":     metric,
         })
     results.sort(key=lambda r: r["value"] if r["value"] is not None else -1, reverse=True)
     return results

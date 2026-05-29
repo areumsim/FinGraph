@@ -1,4 +1,4 @@
-"""FinGraph Streamlit Web UI — 멀티턴 채팅 + 출처 + 비용 노출.
+"""AutoNexusGraph Streamlit Web UI — 멀티턴 채팅 + 출처 + 비용 노출.
 
 설계 메모 (이전 web/app.py 패턴 단순화):
 - 채팅형 multi-turn (st.chat_message, st.chat_input)
@@ -39,7 +39,7 @@ from autonexusgraph.ui.components import (
 )
 
 
-st.set_page_config(page_title="FinGraph", layout="wide")
+st.set_page_config(page_title="AutoNexusGraph", layout="wide")
 
 
 # ─── session_state init ───────────────────────────────────────
@@ -55,7 +55,7 @@ thread_id = get_or_create_thread_id()
 
 # ─── 사이드바 ─────────────────────────────────────────────────
 with st.sidebar:
-    st.title("FinGraph")
+    st.title("AutoNexusGraph")
     st.caption(f"thread: `{thread_id[:20]}…`")
 
     if st.button("새 대화 시작"):

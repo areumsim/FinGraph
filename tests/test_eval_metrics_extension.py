@@ -60,6 +60,7 @@ def test_hybrid_vs_vector_no_multi_hop_subset():
 
 # ── PRD §10.6 — bridge quality MD 렌더 ────────────────────
 def test_format_summary_md_with_data():
+    """PRD §10.6 의 strong_match 모수가 목표 충족 (≥80%) 시 ✅."""
     from eval.metrics.bridge_quality import format_summary_md
 
     quality = {
@@ -70,10 +71,20 @@ def test_format_summary_md_with_data():
             "rejected": 10,
             "high_confidence": 85,
             "high_confidence_ratio": 0.85,
-            "target_ratio": 0.80,
-            "target_met": True,
             "by_entity_type": {"manufacturer": 60, "supplier": 30},
             "by_match_method": {"wikidata_qid": 50, "name_exact": 30, "lei": 10},
+            # strong_match — PRD 모수.
+            "strong_match": {
+                "total": 60, "high_confidence": 55,
+                "high_confidence_ratio": 0.92,
+                "target_ratio": 0.80, "target_met": True,
+                "methods_included": ["wikidata_qid", "lei", "business_no",
+                                      "corp_code", "sec_cik"],
+            },
+            "reviewed_only": {
+                "total": 50, "high_confidence": 48,
+                "high_confidence_ratio": 0.96,
+            },
         },
         "manufacturers": {
             "total": 50, "with_qid": 45, "qid_coverage_ratio": 0.90,
@@ -84,24 +95,34 @@ def test_format_summary_md_with_data():
     }
     md = format_summary_md(quality)
     assert "Bridge 데이터 품질" in md
-    assert "85" in md and "85.0%" in md
-    assert "✅" in md, "target_met=True 면 ✅ 표시"
+    # mock 의 high_confidence_ratio=0.92 → format '92.0%'.
+    assert "55/60" in md and "92.0%" in md   # PRD strong_match
+    assert "✅" in md, "strong_match.target_met=True 면 ✅"
+    assert "PRD §10.6" in md
     assert "manufacturer=60" in md
     assert "wikidata_qid=50" in md
+    assert "48/50" in md and "96.0%" in md   # reviewed_only
 
 
 def test_format_summary_md_target_unmet():
+    """PRD §10.6 strong_match 가 80% 미달이면 ❌."""
     from eval.metrics.bridge_quality import format_summary_md
 
     quality = {
         "bridge": {
             "total": 100, "reviewed": 10, "candidate": 80, "rejected": 10,
             "high_confidence": 30, "high_confidence_ratio": 0.30,
-            "target_ratio": 0.80, "target_met": False,
+            "strong_match": {
+                "total": 40, "high_confidence": 12,
+                "high_confidence_ratio": 0.30,
+                "target_ratio": 0.80, "target_met": False,
+                "methods_included": ["wikidata_qid"],
+            },
         },
     }
     md = format_summary_md(quality)
-    assert "❌" in md, "target_met=False 면 ❌"
+    assert "❌" in md, "strong_match.target_met=False 면 ❌"
+    assert "12/40" in md and "30.0%" in md
 
 
 def test_format_summary_md_empty():

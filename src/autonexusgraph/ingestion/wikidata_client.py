@@ -34,7 +34,7 @@ import httpx
 SPARQL_ENDPOINT = "https://query.wikidata.org/sparql"
 ENTITY_ENDPOINT = "https://www.wikidata.org/wiki/Special:EntityData"
 
-USER_AGENT = "FinGraph/0.1 (research; https://github.com/areumsim/FinGraph)"
+USER_AGENT = "AutoNexusGraph/0.1 (research; https://github.com/areumsim/AutoNexusGraph)"
 
 
 @dataclass(frozen=True)

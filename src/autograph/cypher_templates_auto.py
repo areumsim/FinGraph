@@ -328,11 +328,16 @@ AUTO_TEMPLATES: dict[str, dict] = {
     },
 
     # ── 조사 (NHTSA ODI Investigations) ────────────────────
+    # multi-variant 가 같은 inv 노드를 가리킬 때 (inv, rel) 페어 distinct 는 중복 살려둠
+    # → inv 만 distinct 한 뒤 rel 의 메타는 첫 한 건만 추출 (B2 fix).
     "auto_investigations_by_variant": {
         "cypher": """
         MATCH (v:VehicleVariant {id: $variant_id})-[rel:INVESTIGATED_BY]->(inv:Investigation)
         WHERE ($year_min IS NULL OR inv.snapshot_year >= $year_min)
           AND ($year_max IS NULL OR inv.snapshot_year <= $year_max)
+        WITH inv,
+             head(collect(rel.confidence_score))  AS confidence,
+             head(collect(rel.validated_status))  AS validated_status
         RETURN inv.id                 AS investigation_id,
                inv.action_number      AS action_number,
                inv.investigation_type AS investigation_type,
@@ -341,8 +346,8 @@ AUTO_TEMPLATES: dict[str, dict] = {
                inv.campno             AS campno,
                inv.subject            AS subject,
                inv.summary            AS summary,
-               rel.confidence_score   AS confidence,
-               rel.validated_status   AS validated_status
+               confidence             AS confidence,
+               validated_status       AS validated_status
         ORDER BY inv.opened_date DESC
         LIMIT $limit
         """,
@@ -358,15 +363,15 @@ AUTO_TEMPLATES: dict[str, dict] = {
         "cypher": """
         CALL {
           WITH $model_id AS mid
-          MATCH (m:VehicleModel {id: mid})-[:HAS_VARIANT]->(v:VehicleVariant)
-                -[rel:INVESTIGATED_BY]->(inv:Investigation)
-          RETURN inv, rel
+          MATCH (m:VehicleModel {id: mid})-[:HAS_VARIANT]->(:VehicleVariant)
+                -[r:INVESTIGATED_BY]->(inv:Investigation)
+          RETURN inv, r.confidence_score AS conf
           UNION
           WITH $model_id AS mid
-          MATCH (m:VehicleModel {id: mid})-[rel:INVESTIGATED_BY]->(inv:Investigation)
-          RETURN inv, rel
+          MATCH (m:VehicleModel {id: mid})-[r:INVESTIGATED_BY]->(inv:Investigation)
+          RETURN inv, r.confidence_score AS conf
         }
-        WITH inv, rel
+        WITH inv, max(conf) AS confidence
         WHERE ($year_min IS NULL OR inv.snapshot_year >= $year_min)
           AND ($year_max IS NULL OR inv.snapshot_year <= $year_max)
         RETURN inv.id                 AS investigation_id,
@@ -377,7 +382,7 @@ AUTO_TEMPLATES: dict[str, dict] = {
                inv.campno             AS campno,
                inv.subject            AS subject,
                inv.summary            AS summary,
-               rel.confidence_score   AS confidence
+               confidence             AS confidence
         ORDER BY inv.opened_date DESC
         LIMIT $limit
         """,

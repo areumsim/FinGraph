@@ -111,6 +111,43 @@ def _resolve_customer_models(cur, customer_name: str) -> list[int]:
     return [r[0] for r in cur.fetchall()]
 
 
+def _prefetch_customer_models(cur, customer_names: set[str]) -> dict[str, list[int]]:
+    """seed 내 모든 customer 이름의 model_id 매핑을 1회 round-trip 으로 prefetch.
+
+    seed yaml 의 customers 수가 작더라도 SELECT 횟수가 component 마다 누적되어
+    N+1 패턴 발생. 본 helper 가 ANY(prefixes) 로 한 번에 조회.
+    """
+    if not customer_names:
+        return {}
+    norm_pairs = [(name, normalize_corp_name(name)) for name in customer_names]
+    norm_set = {n for _, n in norm_pairs if n}
+    if not norm_set:
+        return {n: [] for n in customer_names}
+
+    cur.execute("""
+        SELECT mm.name_norm, m.model_id
+          FROM auto.master_vehicle_models m
+          JOIN auto.master_manufacturers mm USING (manufacturer_id)
+         WHERE mm.name_norm = ANY(%s)
+            OR EXISTS (SELECT 1 FROM unnest(%s::text[]) AS prefix
+                        WHERE mm.name_norm LIKE prefix || '%%')
+    """, (list(norm_set), list(norm_set)))
+
+    by_norm: dict[str, list[int]] = {n: [] for n in norm_set}
+    for row in cur.fetchall():
+        nn, mid = row[0], row[1]
+        if nn in by_norm:
+            by_norm[nn].append(mid)
+        else:
+            # prefix 매칭 — 어떤 customer 의 prefix 인지 역추적.
+            for cn in norm_set:
+                if nn.startswith(cn):
+                    by_norm[cn].append(mid)
+                    break
+
+    return {name: by_norm.get(norm, []) for name, norm in norm_pairs}
+
+
 # (:Module|:Part)-[:SUPPLIED_BY]->(:Supplier) UNWIND.
 _MERGE_SUPPLIED_BY = """
 UNWIND $rows AS r
@@ -127,6 +164,91 @@ SET   rel.source_type      = r.source_type,
 """
 
 
+# B1 fix — supplier_seed 가 PG 에 추가한 새 Module 들이 Neo4j 에 미반영이면
+# 위 MATCH (c {id:r.component_id}) 가 0건 → SUPPLIED_BY 적재 실패.
+# SUPPLIED_BY 이전에 component_id → :Module 노드 동기화 한 패스.
+_MERGE_MODULE_FROM_PG = """
+UNWIND $rows AS r
+MERGE (c:Module {id: r.component_id})
+ON CREATE SET c.name        = r.canonical_name,
+              c.name_norm   = r.name_norm,
+              c.system_code = r.system_code,
+              c.source      = r.source,
+              c.updated_at  = datetime()
+ON MATCH SET  c.name        = coalesce(c.name, r.canonical_name),
+              c.system_code = coalesce(c.system_code, r.system_code),
+              c.updated_at  = datetime()
+"""
+
+
+def sync_modules_to_neo4j(conn, session, component_ids: list[int],
+                          *, batch: int = 200) -> int:
+    """B1 fix — PG components → Neo4j :Module 노드 동기화.
+
+    edge MERGE 가 MATCH (c {id:...}) 에 의존하므로 사전 ensure 필수.
+    """
+    if not component_ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT component_id, canonical_name, name_norm, system_code,
+                   COALESCE(source, 'manual_supplier_seed') AS source
+              FROM auto.components
+             WHERE component_id = ANY(%s) AND level = 4
+        """, (component_ids,))
+        rows = [
+            {"component_id": int(r[0]), "canonical_name": r[1],
+             "name_norm": r[2], "system_code": r[3], "source": r[4]}
+            for r in cur.fetchall()
+        ]
+    if not rows:
+        return 0
+    return run_batched(session, _MERGE_MODULE_FROM_PG, rows, batch=batch)
+
+
+# B1 fix part 2 — supplier_seed 가 만든 auto.master_suppliers 의 19 supplier 가
+# Neo4j 에 없음 (load_auto_neo4j.MERGE_SUPPLIER 는 bridge.corp_entity 의 wikidata
+# supplier 만 적재). SUPPLIED_BY MATCH (sup:Supplier {entity_id:...}) 실패.
+_MERGE_SUPPLIER_FROM_PG = """
+UNWIND $rows AS r
+MERGE (sup:Supplier {entity_id: r.entity_id})
+ON CREATE SET sup.name      = r.name,
+              sup.name_norm = r.name_norm,
+              sup.country   = r.country,
+              sup.wikidata_qid = r.wikidata_qid,
+              sup.source    = r.source,
+              sup.updated_at = datetime()
+ON MATCH SET  sup.name      = coalesce(sup.name, r.name),
+              sup.country   = coalesce(sup.country, r.country),
+              sup.updated_at = datetime()
+"""
+
+
+def sync_suppliers_to_neo4j(conn, session, supplier_ids: list[int],
+                            *, batch: int = 200) -> int:
+    """PG master_suppliers → Neo4j :Supplier 동기화.
+
+    entity_id = stringified supplier_id (bridge.corp_entity 컨벤션과 일치).
+    """
+    if not supplier_ids:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT supplier_id, name, name_norm, country, wikidata_qid,
+                   COALESCE(source, 'manual_supplier_seed') AS source
+              FROM auto.master_suppliers
+             WHERE supplier_id = ANY(%s)
+        """, (supplier_ids,))
+        rows = [
+            {"entity_id": str(r[0]), "name": r[1], "name_norm": r[2],
+             "country": r[3], "wikidata_qid": r[4], "source": r[5]}
+            for r in cur.fetchall()
+        ]
+    if not rows:
+        return 0
+    return run_batched(session, _MERGE_SUPPLIER_FROM_PG, rows, batch=batch)
+
+
 def load_supplier_edges(*, dry_run: bool = False, batch: int = 200) -> LoadStats:
     stats = LoadStats()
     seed = _load_seed()
@@ -137,7 +259,18 @@ def load_supplier_edges(*, dry_run: bool = False, batch: int = 200) -> LoadStats
     conn = get_connection()
     edges: list[dict] = []
 
+    # 모든 seed entry 의 customer 이름 사전 추출 (N+1 회피).
+    seed_customers: set[str] = set()
+    for s_row in seed:
+        for comp in s_row.get("components") or []:
+            if isinstance(comp, dict):
+                cust = comp.get("customer")
+                if cust:
+                    seed_customers.add(cust)
+
     with conn.cursor() as cur:
+        customer_models = _prefetch_customer_models(cur, seed_customers)
+
         for s_row in seed:
             sname = s_row.get("supplier")
             if not sname:
@@ -181,7 +314,7 @@ def load_supplier_edges(*, dry_run: bool = False, batch: int = 200) -> LoadStats
                 edge_conf = base_conf
                 edge_status = "validated"
                 if customer:
-                    if not _resolve_customer_models(cur, customer):
+                    if not customer_models.get(customer):
                         stats.customer_unmatched += 1
                         edge_conf = round(base_conf * 0.85, 3)
                         edge_status = "candidate"
@@ -208,6 +341,17 @@ def load_supplier_edges(*, dry_run: bool = False, batch: int = 200) -> LoadStats
     if edges:
         driver = get_driver()
         with driver.session() as session:
+            # B1 fix — Module + Supplier 둘 다 사전 ensure. 둘 중 하나라도
+            # Neo4j 에 없으면 SUPPLIED_BY MATCH 실패.
+            comp_ids = sorted({int(e["component_id"]) for e in edges
+                                if e.get("component_id")})
+            sup_ids  = sorted({int(e["supplier_entity_id"]) for e in edges
+                                if e.get("supplier_entity_id")
+                                and str(e["supplier_entity_id"]).isdigit()})
+            n_mod = sync_modules_to_neo4j(conn, session, comp_ids, batch=batch)
+            n_sup = sync_suppliers_to_neo4j(conn, session, sup_ids, batch=batch)
+            log.info("[supplier_edges] synced %d Module + %d Supplier nodes",
+                     n_mod, n_sup)
             stats.edges_emitted = run_batched(session, _MERGE_SUPPLIED_BY, edges, batch=batch)
 
     log.info("[supplier_edges] suppliers=%d edges=%d unmatched_customer=%d errors=%d",
@@ -231,4 +375,5 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["load_supplier_edges", "LoadStats"]
+__all__ = ["load_supplier_edges", "LoadStats",
+           "sync_modules_to_neo4j", "sync_suppliers_to_neo4j"]

@@ -36,7 +36,7 @@ class GleifClient:
         self._client = httpx.Client(
             timeout=timeout,
             headers={
-                "User-Agent": "FinGraph-Research/0.1 (ifkbn@kolon.com)",
+                "User-Agent": "AutoNexusGraph-Research/0.1 (ifkbn@kolon.com)",
                 "Accept": "application/vnd.api+json",
             },
         )

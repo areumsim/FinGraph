@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import time
@@ -33,6 +34,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, TypeVar
+
+
+log = logging.getLogger(__name__)
 
 from ..config import get_settings
 from ._license import allow_body
@@ -100,18 +104,42 @@ def get_rate_limiter(source: str) -> RateLimiter:
 
 
 # ─── Retry ────────────────────────────────────────────────────────
+def _retry_env(name: str, default: float) -> float:
+    """INGEST_RETRY_{MAX,BASE,JITTER} env override — parsing 실패 시 default + log."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        log.warning("[retry] %s=%r 파싱 실패 — default %s 사용", name, raw, default)
+        return default
+
+
 def fetch_with_retry(
     fn: Callable[[], T],
-    max_tries: int = 5,
-    base: float = 2.0,
-    jitter: float = 0.3,
+    max_tries: int | None = None,
+    base: float | None = None,
+    jitter: float | None = None,
     on_retry: Callable[[int, Exception], None] | None = None,
 ) -> T:
     """exponential backoff + jitter.
 
     fn 이 raise 하면 base*2^(attempt-1) + uniform(0..jitter) 초 대기 후 재시도.
     max_tries 초과 시 마지막 예외 raise.
+
+    env override (None 인 인자에만 적용):
+        INGEST_RETRY_MAX     — max_tries (default 5)
+        INGEST_RETRY_BASE    — base wait sec (default 2.0)
+        INGEST_RETRY_JITTER  — jitter sec (default 0.3)
     """
+    if max_tries is None:
+        max_tries = int(_retry_env("INGEST_RETRY_MAX", 5))
+    if base is None:
+        base = _retry_env("INGEST_RETRY_BASE", 2.0)
+    if jitter is None:
+        jitter = _retry_env("INGEST_RETRY_JITTER", 0.3)
+
     last_exc: Exception | None = None
     for attempt in range(1, max_tries + 1):
         try:
@@ -278,19 +306,38 @@ class CheckpointStore:
 
 
 # ─── 텍스트 정규화 헬퍼 ──────────────────────────────────────────
+
+# 영문 법인격 token — word boundary 매칭만 (substring 매칭 X).
+# 옛 .replace() 방식은 'Transit Connect' → 'Transit nnect' (Connect 의 Co)
+# 같은 over-matching 버그.
+import re as _re_norm
+
+_EN_LEGAL_RE = _re_norm.compile(
+    r"\b(?:Inc|Ltd|Co|Corp|Corporation|Company|Limited)\b\.?",
+    _re_norm.IGNORECASE,
+)
+# 한글 법인격 — 단어 경계 개념 부적합, 그대로 substring replace.
+_KO_LEGAL = (
+    "(주)", "㈜", "주식회사",
+    "(유)", "유한회사",
+    "(합)", "합자회사",
+)
+
+
 def normalize_corp_name(name: str) -> str:
     """회사명 표준화 — 비교/매칭용. SSOT 는 아님(원본 보존).
 
-    예: '(주)삼성전자' / '㈜삼성전자' / '주식회사 삼성전자' / 'Samsung Electronics'
+    예: '(주)삼성전자' / '㈜삼성전자' / '주식회사 삼성전자' / 'Samsung Electronics Inc.'
         → '삼성전자' / 'samsung electronics'
+
+    버그 회피: 'Transit Connect' (Connect 안의 Co), 'Cordova Sedan' (Cordova 의 Co) 등
+    영문 token 은 ``\\b`` word boundary 매칭만.
     """
     if not name:
         return ""
     s = name.strip()
-    # 법인격 prefix/suffix 제거
-    for token in ("(주)", "㈜", "주식회사", "(유)", "유한회사", "(합)", "합자회사",
-                  "Inc.", "Inc", "Ltd.", "Ltd", "Co.", "Co", "Corp.", "Corp",
-                  "Corporation", "Company", "Limited"):
-        s = s.replace(token, " ")
-    s = " ".join(s.split())  # 공백 정규화
+    for t in _KO_LEGAL:
+        s = s.replace(t, " ")
+    s = _EN_LEGAL_RE.sub(" ", s)
+    s = " ".join(s.split())   # 공백 정규화
     return s.lower()

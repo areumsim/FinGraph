@@ -38,12 +38,58 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+import psycopg
+
 from autonexusgraph.config import get_settings
 from autonexusgraph.db.postgres import get_connection
 from autonexusgraph.ingestion._common import normalize_corp_name
 
 
+# SAVEPOINT 패턴 안에서 흡수해도 안전한 예외 종류 — DB 적재 시 row-level 데이터
+# 결함 (FK, type, 누락, ON CONFLICT 외 unique 위배) 만. AttributeError 같은
+# 코드 버그는 의도적으로 raise (fail-fast).
+_ROW_LEVEL_ERRORS = (psycopg.Error, ValueError, TypeError, KeyError)
+
+
 log = logging.getLogger(__name__)
+
+
+# ── 모델명 noise 필터 ────────────────────────────────────────
+# NHTSA vPIC 의 GetModelsForMakeYear 는 같은 makes 이름을 공유하는 자회사·관계사
+# (예 "Hyundai Steel Industries, Inc.", "Hyundai Translead Trailers", Genesis RV
+# 트레일러의 "Tahoe"/"Supreme"/"Envy" 같은) 도 모두 반환. 자동차 모델이 아닌 row 를
+# master_vehicle_models 에 적재하면 vehicle 검색·매칭이 오염된다.
+#
+# 보수적 deny rule (의심스러우면 keep):
+#   1. 회사 접미사 패턴 (Inc / Corp / Industries / Ltd / Co\. / LLC / GmbH / N\.V\.)
+#   2. 알려진 자회사·부문 키워드 (Mobis / Steel / Translead / Trailers)
+import re as _re
+# False positive 회피: "Ford LTD" (실제 옛 차종), "Honda Civic" 같은 일반 모델은 keep.
+# 명확한 회사 접미사 — comma + Inc/Corp/Industries 또는 끝에 'Inc.'/'Corp.'/'LLC' 등.
+_NOISE_MODEL_PATTERNS = (
+    # ', Inc.' / ' Inc.' 끝 — 회사 접미사. comma 유무 무관.
+    _re.compile(r'(?:,\s*|\s+)(Inc|Corp|Industries|LLC|GmbH|S\.A\.|N\.V\.)\.?\s*$', _re.I),
+    # 자회사 키워드.
+    _re.compile(r'\b(Mobis|Translead)\b', _re.I),
+    # 끝이 'Trailers' / 'Trailer' — Genesis/Hyundai 트레일러 자회사.
+    _re.compile(r'\bTrailers?\s*$', _re.I),
+    # 'Steel Industries' — Hyundai Steel 등 제철 자회사.
+    _re.compile(r'\bSteel\s+Industries\b', _re.I),
+)
+
+
+def _is_noise_model_name(name: str | None) -> bool:
+    """차종 모델 이름이 아니라고 의심되는 row 판별. True 면 reject.
+
+    보수적 — 명확한 자회사·트레일러 신호만. 'Ford LTD' 같은 실차종은 keep.
+    """
+    if not name or not name.strip():
+        return True
+    s = name.strip()
+    for pat in _NOISE_MODEL_PATTERNS:
+        if pat.search(s):
+            return True
+    return False
 
 
 @dataclass
@@ -62,32 +108,52 @@ def _auto_raw_root() -> Path:
 def _resolve_make_model_variant(
     cur: Any, make_name: str, model_name: str, model_year: int | None,
 ) -> tuple[int | None, int | None, int | None]:
-    """make+model+year → (manufacturer_id, model_id, variant_id) 단일 LEFT JOIN 1회.
+    """make+model+year → (manufacturer_id, model_id, variant_id).
 
-    매칭 실패한 슬롯은 NULL — recall/complaint row 가 일부 메타만 가져도 적재는 진행.
+    vPIC 의 brand 중복 (예: FORD 가 mfr_id 460/1237/5697/8578/... 10+) 케이스에서
+    model_name 매칭 가능한 mfr 을 우선 선택. 이전 LEFT JOIN + LIMIT 1 은 첫 mfr
+    만 선택해 model_id NULL 적재되는 버그가 있었음.
+
+    우선순위:
+        1. (make, model) 직접 INNER JOIN — model_name 매칭하는 mfr 선택
+           (variant year 도 매칭하면 그 row 선택 — 더 구체적)
+        2. model_name 매칭 없으면 brand 만 — manufacturer_id 만 반환
+
+    매칭 실패한 슬롯은 NULL.
     """
     if not make_name:
         return None, None, None
+
+    make_norm = normalize_corp_name(make_name)
+    model_norm = normalize_corp_name(model_name) if model_name else None
+
+    # 1) (make, model) 매칭 — model_year 일치 variant 우선.
+    if model_norm:
+        cur.execute("""
+            SELECT mm.manufacturer_id, m.model_id, v.variant_id
+              FROM auto.master_vehicle_models m
+              JOIN auto.master_manufacturers mm USING (manufacturer_id)
+              LEFT JOIN auto.master_vehicle_variants v
+                ON v.model_id = m.model_id
+               AND v.model_year = %s::int
+             WHERE mm.name_norm = %s AND m.name_norm = %s
+             ORDER BY (v.variant_id IS NULL) ASC, m.model_id ASC
+             LIMIT 1
+        """, (model_year, make_norm, model_norm))
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1], row[2]
+
+    # 2) brand 만 매칭 — 어떤 mfr 이든 첫 매칭 (model_id, variant_id NULL).
     cur.execute("""
-        SELECT mm.manufacturer_id, m.model_id, v.variant_id
-          FROM auto.master_manufacturers mm
-          LEFT JOIN auto.master_vehicle_models m
-            ON m.manufacturer_id = mm.manufacturer_id
-           AND m.name_norm = %s
-          LEFT JOIN auto.master_vehicle_variants v
-            ON v.model_id = m.model_id
-           AND v.model_year = %s::int
-         WHERE mm.name_norm = %s
-         LIMIT 1
-    """, (
-        normalize_corp_name(model_name) if model_name else None,
-        model_year,
-        normalize_corp_name(make_name),
-    ))
+        SELECT manufacturer_id FROM auto.master_manufacturers
+         WHERE name_norm = %s
+         ORDER BY manufacturer_id ASC LIMIT 1
+    """, (make_norm,))
     row = cur.fetchone()
     if not row:
         return None, None, None
-    return row[0], row[1], row[2]
+    return row[0], None, None
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict]:
@@ -250,7 +316,7 @@ def load_vpic(*, dry_run: bool = False) -> LoadStats:
                         source_ref=str(m["Make_ID"]))
                     cur.execute("RELEASE SAVEPOINT sp_vpic_mfr")
                     stats.inserted += 1
-                except Exception as e:  # noqa: BLE001
+                except _ROW_LEVEL_ERRORS as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_vpic_mfr")
                     stats.errors.append(f"vpic make {m.get('Make_ID')}: {e}")
 
@@ -263,6 +329,12 @@ def load_vpic(*, dry_run: bool = False) -> LoadStats:
                     make_name = row["make"]
                     model_name = row["model_name"]
                     model_year = int(row["model_year"])
+
+                    # noise 모델 (회사 접미사·자회사·트레일러 등) skip.
+                    if _is_noise_model_name(model_name):
+                        cur.execute("RELEASE SAVEPOINT sp_vpic_var")
+                        stats.skipped += 1
+                        continue
 
                     # 제조사가 all_makes 에 없을 수도 있어 다시 보장
                     _ensure_manufacturer(cur,
@@ -287,7 +359,7 @@ def load_vpic(*, dry_run: bool = False) -> LoadStats:
                         raw=row.get("raw") or {})
                     cur.execute("RELEASE SAVEPOINT sp_vpic_var")
                     stats.inserted += 1
-                except Exception as e:  # noqa: BLE001
+                except _ROW_LEVEL_ERRORS as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_vpic_var")
                     stats.errors.append(f"vpic variant {variants_file}: {e}")
     if dry_run:
@@ -308,6 +380,8 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
         return stats
 
     conn = get_connection()
+    _COMMIT_EVERY = 500     # SAVEPOINT/subtxn 누적 방지를 위한 mid-commit interval.
+    _rows_since_commit = 0
     with conn.cursor() as cur:
         for f in root.glob("*/*/*.json"):
             try:
@@ -318,6 +392,7 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
 
             for r in data.get("results") or []:
                 # row 별 savepoint — 한 row 가 실패해도 트랜잭션 전체 abort 되지 않게.
+                # SAVEPOINT 누적 회피: _COMMIT_EVERY 도달마다 mid-commit → subtxn ID reset.
                 cur.execute("SAVEPOINT sp_recall")
                 try:
                     make_name = r.get("Make") or ""
@@ -364,9 +439,14 @@ def load_recalls(*, dry_run: bool = False) -> LoadStats:
                     ))
                     cur.execute("RELEASE SAVEPOINT sp_recall")
                     stats.inserted += 1
-                except Exception as e:  # noqa: BLE001
+                except _ROW_LEVEL_ERRORS as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_recall")
                     stats.errors.append(f"recalls {f}: {e}")
+
+                _rows_since_commit += 1
+                if not dry_run and _rows_since_commit >= _COMMIT_EVERY:
+                    conn.commit()
+                    _rows_since_commit = 0
     if dry_run:
         conn.rollback()
     else:
@@ -383,6 +463,8 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
         return stats
 
     conn = get_connection()
+    _COMMIT_EVERY = 500     # 16k complaints — SAVEPOINT 누적 차단 mid-commit.
+    _rows_since_commit = 0
     with conn.cursor() as cur:
         for f in root.glob("*/*/*.json"):
             try:
@@ -449,9 +531,14 @@ def load_complaints(*, dry_run: bool = False) -> LoadStats:
                     ))
                     cur.execute("RELEASE SAVEPOINT sp_complaint")
                     stats.inserted += 1
-                except Exception as e:  # noqa: BLE001
+                except _ROW_LEVEL_ERRORS as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_complaint")
                     stats.errors.append(f"complaint {f}: {e}")
+
+                _rows_since_commit += 1
+                if not dry_run and _rows_since_commit >= _COMMIT_EVERY:
+                    conn.commit()
+                    _rows_since_commit = 0
     if dry_run:
         conn.rollback()
     else:
@@ -501,7 +588,7 @@ def load_wikidata(*, dry_run: bool = False) -> LoadStats:
                         country=country, wikidata_qid=qid)
                     stats.inserted += 1
                 cur.execute("RELEASE SAVEPOINT sp_wd_mfr")
-            except Exception as e:  # noqa: BLE001
+            except _ROW_LEVEL_ERRORS as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp_wd_mfr")
                 stats.errors.append(f"wikidata mfr {row.get('mfr_qid')}: {e}")
 
@@ -532,7 +619,7 @@ def load_wikidata(*, dry_run: bool = False) -> LoadStats:
                     source="wikidata", source_ref=qid, wikidata_qid=qid)
                 cur.execute("RELEASE SAVEPOINT sp_wd_model")
                 stats.inserted += 1
-            except Exception as e:  # noqa: BLE001
+            except _ROW_LEVEL_ERRORS as e:
                 cur.execute("ROLLBACK TO SAVEPOINT sp_wd_model")
                 stats.errors.append(f"wikidata model {row.get('model_qid')}: {e}")
 
@@ -549,14 +636,17 @@ def load_wikidata(*, dry_run: bool = False) -> LoadStats:
 
 
 # ── 보조 ────────────────────────────────────────────────────
+_AMBIGUOUS_DATE_WARNED: set[str] = set()   # 동일 파일에서 반복 경고 억제.
+
+
 def _to_iso_date(s: str | None) -> str:
     """'MM/DD/YYYY' / 'DD/MM/YYYY' / 'YYYY-MM-DD' / None → 'YYYY-MM-DD' or ''.
 
     NHTSA 의 엔드포인트별 표기가 일관되지 않음:
       - /complaints/ : MM/DD/YYYY
       - /recalls/    : DD/MM/YYYY
-    parts[0]>12 → DD/MM, parts[1]>12 → MM/DD 로 명확히 판정. 둘 다 ≤12 이면 MM/DD
-    로 가정 (US 관습; 모호 케이스에선 무해).
+    parts[0]>12 → DD/MM, parts[1]>12 → MM/DD 로 명확히 판정.
+    둘 다 ≤12 이면 모호 — MM/DD 로 가정 (US 관습) + log.warning (sample 만).
     """
     if not s:
         return ""
@@ -575,8 +665,14 @@ def _to_iso_date(s: str | None) -> str:
                 dd, mm = ai, bi
             elif bi > 12 and ai <= 12:      # MM/DD/YYYY
                 mm, dd = ai, bi
-            else:                            # 둘 다 ≤12 (모호) — MM/DD 로 가정.
+            else:                            # 둘 다 ≤12 (모호) — MM/DD 가정.
                 mm, dd = ai, bi
+                if s not in _AMBIGUOUS_DATE_WARNED and len(_AMBIGUOUS_DATE_WARNED) < 10:
+                    _AMBIGUOUS_DATE_WARNED.add(s)
+                    log.warning(
+                        "[date] 모호 케이스 %r — MM/DD 가정 → %s-%02d-%02d "
+                        "(첫 10개만 경고)", s, yy.zfill(4), mm, dd,
+                    )
             return f"{yy.zfill(4)}-{mm:02d}-{dd:02d}"
     return s[:10]
 

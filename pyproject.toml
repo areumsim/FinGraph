@@ -59,6 +59,8 @@ agent = [
     # Tracing (PRD §7.5.11) — Langfuse self-host 또는 LangSmith 양쪽 지원
     "langfuse>=2.0",
     "langsmith>=0.1",
+    # calculator_worker — eval() fallback 제거 후 numexpr 강제 (보안).
+    "numexpr>=2.10",
 ]
 
 # UI

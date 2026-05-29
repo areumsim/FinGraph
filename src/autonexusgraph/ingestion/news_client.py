@@ -53,7 +53,7 @@ class NewsRssClient:
 
     def __init__(self, timeout: float = 30.0) -> None:
         self._client = httpx.Client(timeout=timeout, headers={
-            "User-Agent": "FinGraph/0.1 (research)",
+            "User-Agent": "AutoNexusGraph/0.1 (research)",
         })
 
     def __enter__(self) -> "NewsRssClient":

@@ -378,7 +378,17 @@ def _stream_with_fallback_chain(state: AgentState) -> Iterator[tuple[str, AgentS
 
 def _init_state(question: str, thread_id: str, history: list[dict] | None,
                 *, domain: str | None = None) -> AgentState:
-    """초기 state. domain 미지정 시 자동 라우터로 결정 ('finance' 기본)."""
+    """초기 state. domain 미지정 시 자동 라우터로 결정 ('finance' 기본).
+
+    domain 라우팅 흐름 (PRD §7.5.11):
+        UI/streamlit (또는 eval adapter) — domain 명시 또는 None
+            ↓ _init_state — autograph.policy.route_domain 호출 (None 일 때)
+        state["domain"] = "finance" | "auto" | "cross_domain"
+            ↓ agents/workers._toolbox_for(state)
+        해당 도메인의 tool 함수 풀 (autonexusgraph.tools / autograph.tools)
+            ↓ agents/nodes — planner/executor 가 state["domain"] 별 분기
+        cypher / SQL 호출
+    """
     if not domain:
         try:
             from autograph.policy import route_domain

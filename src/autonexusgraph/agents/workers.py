@@ -252,7 +252,11 @@ def calculator_worker(state: AgentState, task: dict) -> AgentState:
 
 
 def _safe_calculator(expr: str, variables: dict) -> float:
-    """numexpr 기반 안전 평가. numexpr 미설치 시 정적 검사 후 eval (제한된 namespace)."""
+    """numexpr 기반 안전 평가. numexpr 미설치 시 ImportError 가 그대로 raise.
+
+    eval() fallback 은 의도적으로 제거 — guarded eval 도 잠재 우회 경로 (e.g.
+    f-string, walrus) 가 있어 sandbox 가 아닌 환경에서 사용 위험.
+    """
     if not expr or not isinstance(expr, str):
         raise ValueError("expr 필요")
     # 1차 정적 가드 — 허용 문자만
@@ -276,11 +280,12 @@ def _safe_calculator(expr: str, variables: dict) -> float:
 
     try:
         import numexpr   # type: ignore[import-not-found]
-        return float(numexpr.evaluate(expr, local_dict=safe_vars, global_dict={}).item())
-    except ImportError:
-        # 폴백 — 매우 제한된 builtins (산술만)
-        return float(eval(expr,   # noqa: S307 — guarded above
-                           {"__builtins__": {}}, safe_vars))
+    except ImportError as e:
+        raise RuntimeError(
+            "calculator_worker 는 numexpr 의존 — `pip install numexpr` 필요. "
+            "(eval() fallback 은 보안상 제거됨)"
+        ) from e
+    return float(numexpr.evaluate(expr, local_dict=safe_vars, global_dict={}).item())
 
 
 def _aggregate(op: str, values: list) -> float:

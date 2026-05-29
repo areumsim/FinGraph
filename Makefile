@@ -17,13 +17,13 @@
         ingest-auto-vpic ingest-auto-recalls ingest-auto-complaints \
         ingest-auto-wikidata ingest-auto-safety ingest-auto-wikipedia \
         ingest-auto-epa ingest-auto-investigations ingest-auto-sec-oem \
-        ingest-auto-all \
+        ingest-auto-mfrcomm ingest-auto-all \
         load-auto-pg load-auto-neo4j load-auto-bridge \
         build-chunks-auto neo4j-init-auto load-auto-all eval-auto \
         load-auto-recall-components load-auto-supplier-edges \
         load-auto-seed-standards-plants load-auto-complaints-neo4j \
         load-auto-aihub load-auto-specs load-auto-safety load-auto-epa \
-        load-auto-investigations load-auto-oem-sec \
+        load-auto-investigations load-auto-oem-sec load-auto-mfrcomm \
         derive-auto-contains-system load-wikidata-part-supplies \
         extract-auto-p3 extract-auto-p3-cost validate-auto-p4 extract-validate-auto \
         audit-bom-coverage audit-edge-meta audit-dod \
@@ -80,7 +80,9 @@ help:
 	@echo "  load-auto-specs                   canspec → spec_measurements + variant 보강"
 	@echo "  load-auto-safety                  NCAP raw → spec_measurements(safety.*) + SAFETY_RATED_BY"
 	@echo "  load-auto-supplier-edges          supplier_seed.yaml → :SUPPLIED_BY (manual A grade)"
+	@echo "  load-auto-nhtsa-taxonomy          NHTSA recall component_text → auto.components (level=4)"
 	@echo "  load-auto-recall-components       recall.component_text → :RECALL_OF (deterministic)"
+	@echo "  load-auto-complaint-components    complaint.components → :COMPLAINT_OF (taxonomy 후행)"
 	@echo "  load-auto-seed-standards-plants   :Standard + :Plant + :OWNS_PLANT 시드"
 	@echo "  load-auto-complaints-neo4j        :Complaint + :REPORTED_IN"
 	@echo "  derive-auto-contains-system       (VehicleModel)-[:CONTAINS_SYSTEM]->(System) 유도 적재"
@@ -100,9 +102,9 @@ help:
 	@echo "── 외부 데이터 (graceful skip 패턴 — 키 없으면 스킵) ──"
 	@echo "  ingest-datagokr-recalls           data.go.kr 15089863 한국 리콜"
 	@echo "  ingest-datagokr-inspections       data.go.kr 15155857 수리검사"
-	@echo "  ingest-car-go-kr                  car.go.kr CSV 파싱 (수동 다운)"
-	@echo "  ingest-katri                      KATRI / bigdata-tic.kr (OAuth)"
-	@echo "  ingest-kncap                      KNCAP 안전등급"
+	@echo "  ingest-car-go-kr                  [PLACEHOLDER] car.go.kr — 키 미설정 시 raw/auto/car_go_kr/ CSV 수동 다운로드 후 normalize"
+	@echo "  ingest-katri                      [PLACEHOLDER] KATRI / bigdata-tic.kr — OAuth client_id/secret 발급 필요"
+	@echo "  ingest-kncap                      [PLACEHOLDER] KNCAP — 공식 API 미공개, 수동 CSV 또는 KNCAP_API_KEY 설정 시 동작"
 	@echo "  load-manufactured-at              모델↔공장 seed → MANUFACTURED_AT"
 	@echo ""
 	@echo "  clean           __pycache__/.pytest_cache 삭제"
@@ -333,6 +335,11 @@ ingest-auto-investigations:
 ingest-auto-sec-oem:
 	$(PYTHON) -m autograph.ingestion.sec_oem
 
+# NHTSA Manufacturer Communications (TSB) — manual download mode (URL retired).
+# 사용자 안내 출력 후 종료. 다운로드한 zip 을 data/raw/auto/nhtsa_mfrcomm/ 에 배치.
+ingest-auto-mfrcomm:
+	$(PYTHON) -m autograph.ingestion.nhtsa_mfrcomm
+
 ingest-auto-all: ingest-auto-vpic ingest-auto-wikidata ingest-auto-recalls ingest-auto-complaints ingest-auto-safety ingest-auto-wikipedia ingest-auto-epa ingest-auto-investigations ingest-auto-sec-oem
 	@echo "[autograph] ingest-auto-all done."
 
@@ -352,8 +359,14 @@ build-chunks-auto:
 	$(PYTHON) -m autograph.loaders.build_chunks_auto --source all
 
 # BOM 계층 + 공급망 / 표준 / 공장 / 컴플레인 / 리콜→부품 매칭 (P2 deterministic 추가 패스).
+load-auto-nhtsa-taxonomy:
+	$(PYTHON) -m autograph.loaders.load_nhtsa_component_taxonomy
+
 load-auto-recall-components:
 	$(PYTHON) -m autograph.loaders.load_recall_components
+
+load-auto-complaint-components:
+	$(PYTHON) -m autograph.loaders.load_complaint_components
 
 load-auto-supplier-edges:
 	$(PYTHON) -m autograph.loaders.load_supplier_edges
@@ -385,6 +398,11 @@ load-auto-investigations:
 load-auto-oem-sec:
 	$(PYTHON) -m autograph.loaders.load_auto_oem_sec
 
+# NHTSA TSB / Manufacturer Communications → vec.chunks (source='nhtsa_tsb').
+# zip 이 raw 디렉토리에 없으면 안내만 출력. (URL 자동 다운 불가 — manual mode.)
+load-auto-mfrcomm:
+	$(PYTHON) -m autograph.loaders.load_auto_mfrcomm
+
 # (VehicleModel)-[:CONTAINS_SYSTEM]->(System) — derived after CONTAINS_COMPONENT 적재.
 derive-auto-contains-system:
 	$(PYTHON) -m autograph.loaders.derive_contains_system
@@ -403,8 +421,10 @@ load-wikidata-part-supplies:
 load-auto-all: neo4j-init-auto load-auto-pg load-auto-specs load-auto-neo4j \
                load-auto-bridge load-auto-seed-standards-plants \
                load-auto-safety load-auto-epa load-auto-aihub \
+               load-auto-nhtsa-taxonomy \
                load-auto-supplier-edges \
                load-auto-complaints-neo4j load-auto-recall-components \
+               load-auto-complaint-components \
                load-auto-investigations load-auto-oem-sec \
                derive-auto-contains-system \
                load-wikidata-part-supplies \

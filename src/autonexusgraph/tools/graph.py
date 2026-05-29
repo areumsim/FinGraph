@@ -58,9 +58,17 @@ def _exec(template_name: str, **params: Any) -> list[dict]:
 
 # ── 회사 식별 ────────────────────────────────────────────────────────
 
-def lookup_company(query: str, limit: int = 5) -> list[dict]:
-    """이름·종목코드·corp_code 로 Neo4j Company 찾기."""
+def lookup_company_node(query: str, limit: int = 5) -> list[dict]:
+    """이름·종목코드·corp_code 로 Neo4j :Company 노드 찾기.
+
+    SQL 동명 함수 (``tools/financials.py:lookup_company``) 와 명명 충돌 방지를
+    위해 ``_node`` 접미사. SQL 측은 master.companies 테이블 직접 조회.
+    """
     return _exec("lookup_company", q=query.strip(), limit=_cap(limit))
+
+
+# 하위호환 alias — 신규 코드는 lookup_company_node 사용 권장.
+lookup_company = lookup_company_node
 
 
 def lookup_person(name: str, birth_year: int | None = None,
